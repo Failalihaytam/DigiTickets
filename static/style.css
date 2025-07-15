@@ -49,4 +49,36 @@ button:hover {
 p[style] {
     color: #d32f2f !important;
     margin-top: 10px;
+}
+.forgot-link {
+    display: block;
+    margin-top: 10px;
+    color: #7A9B41;
+    text-decoration: none;
+    font-size: 14px;
+    text-align: center;
+}
+.forgot-link:hover {
+    text-decoration: underline;
+}
+.back-link {
+    display: block;
+    margin-top: 18px;
+    color: #373F41;
+    text-decoration: none;
+    font-size: 14px;
+    text-align: center;
+}
+.back-link:hover {
+    text-decoration: underline;
+}
+.success {
+    color: #388e3c;
+    text-align: center;
+    margin-top: 10px;
+}
+.error {
+    color: #d32f2f;
+    text-align: center;
+    margin-top: 10px;
 } 
