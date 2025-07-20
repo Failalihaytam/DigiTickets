@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Tableau de bord - DigiTickets</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="logo-container">
+        <img src="{{ url_for('static', filename='Logotype@2x.png') }}" alt="CDG Logo" class="logo-img">
+        <div class="app-name">DigiTickets</div>
+    </div>
+    <div class="card">
+        <h2>Bonjour {{ nom }} !</h2>
+        
+        <!-- Add new ticket button -->
+        <div style="text-align: center; margin-bottom: 24px;">
+            <a href="{{ url_for('ajouter_ticket') }}" class="dashboard-btn">Ajouter un ticket</a>
+        </div>
+        
+        <!-- Display existing tickets -->
+        <div class="tickets-section">
+            <h3>Mes tickets</h3>
+            {% if tickets %}
+                <div class="tickets-list">
+                    {% for ticket in tickets %}
+                        <div class="ticket-item">
+                            <div class="ticket-header">
+                                <h4>{{ ticket[1] }}</h4>
+                                <span class="ticket-date">{{ ticket[3][:10] if ticket[3] else 'N/A' }}</span>
+                            </div>
+                            <p class="ticket-description">{{ ticket[2][:100] + '...' if ticket[2] and ticket[2]|length > 100 else ticket[2] or 'Aucune description' }}</p>
+                            <div class="ticket-status">
+                                <span class="status-badge {{ 'status-pending' if ticket[4] == 'en cours' else 'status-active' if ticket[4] == 'clôturé' else 'status-suspendu' }}">
+                                    {{ ticket[4] or 'Statut inconnu' }}
+                                </span>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="no-tickets">Aucun ticket créé pour le moment.</p>
+            {% endif %}
+        </div>
+        
+        <a href="{{ url_for('logout') }}" class="back-link">Se déconnecter</a>
+    </div>
+</body>
+</html> 

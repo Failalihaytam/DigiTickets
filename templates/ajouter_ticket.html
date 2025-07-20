@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Ajouter un ticket - DigiTickets</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="logo-container">
+        <img src="{{ url_for('static', filename='Logotype@2x.png') }}" alt="CDG Logo" class="logo-img">
+        <div class="app-name">DigiTickets</div>
+    </div>
+    <div class="card">
+        <h2>Ajouter un ticket</h2>
+        <form method="post" enctype="multipart/form-data">
+            <label for="titre">Titre du ticket :</label>
+            <input type="text" id="titre" name="titre" required placeholder="Titre du ticket"><br>
+            <label for="description">Description :</label>
+            <textarea id="description" name="description" rows="4" placeholder="Décrivez votre problème ou demande"></textarea><br>
+            <label for="categorie">Catégorie :</label>
+            <select id="categorie" name="categorie" required>
+                <option value="">Sélectionner une catégorie</option>
+                {% for cat in categories %}
+                    <option value="{{ cat[0] }}">{{ cat[1] }}</option>
+                {% endfor %}
+            </select><br>
+            <label for="type">Type :</label>
+            <select id="type" name="type" required>
+                <option value="">Sélectionner un type</option>
+                {% for t in types %}
+                    <option value="{{ t[0] }}">{{ t[1] }}</option>
+                {% endfor %}
+            </select><br>
+            <label for="fichier">Joindre un fichier (optionnel) :</label>
+            <input type="file" id="fichier" name="fichier" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt"><br>
+            <button type="submit">Créer le ticket</button>
+        </form>
+        <a href="{{ url_for('dashboard_initial') }}" class="back-link">Retour au tableau de bord</a>
+    </div>
+</body>
+</html> 

@@ -16,7 +16,7 @@ body {
     margin-bottom: 18px;
 }
 .logo-img {
-    width: 120px;
+    width: 140px;
     height: auto;
     margin-bottom: 8px;
 }
@@ -129,6 +129,108 @@ p[style] {
     margin-top: 10px;
     text-align: center;
     font-size: 1rem;
+}
+.dashboard-btn {
+    display: block;
+    width: 220px;
+    background: #7A9B41;
+    color: #fff;
+    text-align: center;
+    padding: 12px 0;
+    border-radius: 5px;
+    font-size: 1.08rem;
+    font-weight: 600;
+    text-decoration: none;
+    margin-bottom: 6px;
+    box-shadow: 0 2px 8px rgba(122, 155, 65, 0.08);
+    transition: background 0.2s, box-shadow 0.2s;
+}
+.dashboard-btn:hover {
+    background: #5e7c2c;
+    box-shadow: 0 4px 16px rgba(122, 155, 65, 0.12);
+}
+.tickets-section {
+    margin-top: 24px;
+}
+.tickets-section h3 {
+    color: #373F41;
+    margin-bottom: 16px;
+    font-size: 1.2rem;
+}
+.tickets-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.ticket-item {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 16px;
+    transition: box-shadow 0.2s;
+}
+.ticket-item:hover {
+    box-shadow: 0 2px 8px rgba(55, 63, 65, 0.08);
+}
+.ticket-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.ticket-header h4 {
+    margin: 0;
+    color: #373F41;
+    font-size: 1.1rem;
+}
+.ticket-date {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+.ticket-description {
+    color: #495057;
+    margin: 8px 0;
+    line-height: 1.4;
+}
+.ticket-status {
+    margin-top: 8px;
+}
+.status-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.status-pending {
+    background: #fff3cd;
+    color: #856404;
+}
+.status-active {
+    background: #d1ecf1;
+    color: #0c5460;
+}
+.no-tickets {
+    text-align: center;
+    color: #6c757d;
+    font-style: italic;
+    margin: 20px 0;
+}
+textarea {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #7A9B41;
+    border-radius: 5px;
+    outline: none;
+    font-size: 1rem;
+    font-family: inherit;
+    background: #f6f8f4;
+    transition: border 0.2s;
+    resize: vertical;
+}
+textarea:focus {
+    border: 1.5px solid #5e7c2c;
+    background: #fff;
 }
 @media (max-width: 500px) {
     .card {
