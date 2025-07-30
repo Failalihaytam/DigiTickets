@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Gestion des Utilisateurs - DigiTickets</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 250px;
+            background: #f4f7f2;
+            padding: 24px 18px;
+            box-shadow: 2px 0 8px rgba(55, 63, 65, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            position: fixed;
+            left: 0;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .sidebar a {
+            color: #373F41;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 1.05rem;
+            padding: 12px 16px;
+            border-radius: 8px;
+            transition: background 0.2s, color 0.2s;
+        }
+        .sidebar a:hover {
+            background: #e6f2d8;
+            color: #7A9B41;
+        }
+        .main-content {
+            flex: 1;
+            margin-left: 250px;
+            padding: 24px;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+        .logo-container {
+            margin-bottom: 32px;
+        }
+        .users-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        .users-table th,
+        .users-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .users-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+        .users-table tr:hover {
+            background: #f8f9fa;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        .btn-edit {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.875rem;
+        }
+        .btn-edit:hover {
+            background: #0056b3;
+        }
+        .btn-delete {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.875rem;
+        }
+        .btn-delete:hover {
+            background: #c82333;
+        }
+        .role-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .role-initial {
+            background: #28a745;
+            color: white;
+        }
+        .role-N1 {
+            background: #17a2b8;
+            color: white;
+        }
+        .role-N2 {
+            background: #dc3545;
+            color: white;
+        }
+        .role-N3 {
+            background: #ffc107;
+            color: #212529;
+        }
+        .role-N4 {
+            background: #6f42c1;
+            color: white;
+        }
+        .flash-messages {
+            margin-bottom: 24px;
+        }
+        .flash-message {
+            padding: 12px 16px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .flash-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .flash-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        @media (max-width: 900px) {
+            body { flex-direction: column; }
+            .sidebar { 
+                position: relative; 
+                width: 100%; 
+                height: auto; 
+                flex-direction: row; 
+                padding: 12px 24px; 
+                gap: 12px; 
+                justify-content: center;
+                box-shadow: 0 2px 8px rgba(55, 63, 65, 0.1);
+            }
+            .main-content { 
+                margin-left: 0; 
+                padding: 16px; 
+            }
+            .users-table {
+                font-size: 0.875rem;
+            }
+            .users-table th,
+            .users-table td {
+                padding: 8px 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='Logotype@2x.png') }}" alt="CDG Logo" class="logo-img">
+            <div class="app-name">DigiTickets</div>
+        </div>
+        <a href="{{ url_for('dashboard_admin') }}">Tableau de bord</a>
+        <a href="{{ url_for('gestion_utilisateurs') }}" style="background: #e6f2d8; color: #7A9B41;">Gestion des utilisateurs</a>
+        <a href="{{ url_for('gestion_habilitations') }}">Gestion des habilitations</a>
+        <a href="{{ url_for('logout') }}">Se déconnecter</a>
+    </div>
+    <div class="main-content">
+        <div class="card">
+            <div class="users-header">
+                <h2>Gestion des Utilisateurs</h2>
+                <a href="{{ url_for('ajouter_utilisateur') }}" class="dashboard-btn">Ajouter un utilisateur</a>
+            </div>
+            
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-messages">
+                        {% for category, message in messages %}
+                            <div class="flash-message flash-{{ 'success' if category == 'success' else 'error' }}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+            
+            <table class="users-table">
+                <thead>
+                    <tr>
+                        <th>Nom d'utilisateur</th>
+                        <th>Email</th>
+                        <th>Prénom</th>
+                        <th>Nom</th>
+                        <th>Rôle</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                        <tr>
+                            <td>{{ user[1] }}</td>
+                            <td>{{ user[2] }}</td>
+                            <td>{{ user[3] }}</td>
+                            <td>{{ user[4] }}</td>
+                            <td>
+                                <span class="role-badge role-{{ user[5] }}">
+                                    {{ user[5] }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <a href="{{ url_for('modifier_utilisateur', user_id=user[0]) }}" class="btn-edit">Modifier</a>
+                                    <form method="POST" action="{{ url_for('supprimer_utilisateur', user_id=user[0]) }}" style="display: inline;" onsubmit="return confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')">
+                                        <button type="submit" class="btn-delete">Supprimer</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html> 
