@@ -82,7 +82,7 @@
             <input type="file" id="fichier" name="fichier" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt"><br>
             <button type="submit">Créer le ticket</button>
         </form>
-        <a href="{{ url_for('dashboard_initial') }}" class="back-link">Retour au tableau de bord</a>
+        <a href="{% if session.get('user_role') == 'N2' %}{{ url_for('dashboard_admin') }}{% else %}{{ url_for('dashboard_initial') }}{% endif %}" class="back-link">Retour au tableau de bord</a>
     </div>
 
     <div class="overlay" id="overlay"></div>
@@ -122,7 +122,7 @@
         }
 
         function redirectToDashboard() {
-            window.location.href = "{{ url_for('dashboard_initial') }}";
+            window.location.href = "{% if session.get('user_role') in ['N1', 'N2', 'N3', 'N4'] %}{{ url_for('dashboard_admin') }}{% else %}{{ url_for('dashboard_initial') }}{% endif %}";
         }
     </script>
 </body>
