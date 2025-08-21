@@ -4,12 +4,105 @@ import smtplib
 from email.mime.text import MIMEText
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
+import threading
+import time
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Needed for flash messages
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
+
+# ---- Helpers ----
+ROLE_ORDER = ['N1', 'N2', 'N3', 'N4']
+RESOLUTION_MINUTES_BY_ROLE = {
+    'N1': 1,
+    'N2': 2,
+    'N3': 3,
+    'N4': 4,
+}
+
+def get_db_connection():
+    return sqlite3.connect('database.db')
+
+def get_role_id_by_name(role_name: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('SELECT id FROM role WHERE nom = ?', (role_name,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def current_role_name():
+    return session.get('user_role')
+
+def ensure_ticket_columns():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('PRAGMA table_info(ticket)')
+    cols = {row[1] for row in c.fetchall()}
+    to_add = []
+    if 'assigned_role_id' not in cols:
+        to_add.append('ALTER TABLE ticket ADD COLUMN assigned_role_id INTEGER')
+    if 'required_habilitation_id' not in cols:
+        to_add.append('ALTER TABLE ticket ADD COLUMN required_habilitation_id INTEGER')
+    if 'resolution_due_at' not in cols:
+        to_add.append('ALTER TABLE ticket ADD COLUMN resolution_due_at DATETIME')
+    if 'resolution_attempts' not in cols:
+        to_add.append('ALTER TABLE ticket ADD COLUMN resolution_attempts INTEGER DEFAULT 0')
+    for sql in to_add:
+        try:
+            c.execute(sql)
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+
+# Background watcher to auto-mark tickets as resolved when due
+_watcher_started = False
+
+def start_resolution_watcher():
+    global _watcher_started
+    if _watcher_started:
+        return
+    _watcher_started = True
+
+    def _loop():
+        while True:
+            try:
+                conn = get_db_connection()
+                c = conn.cursor()
+                # Get statut IDs
+                c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident en cours de résolution',))
+                row_in_progress = c.fetchone()
+                c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident résolu',))
+                row_resolu = c.fetchone()
+                if row_in_progress and row_resolu:
+                    in_progress_id = row_in_progress[0]
+                    resolu_id = row_resolu[0]
+                    now = datetime.now()
+                    # Find tickets due
+                    c.execute('''
+                        SELECT id FROM ticket
+                        WHERE statut_id = ? AND resolution_due_at IS NOT NULL AND resolution_due_at <= ?
+                    ''', (in_progress_id, now))
+                    due_ids = [r[0] for r in c.fetchall()]
+                    if due_ids:
+                        for tid in due_ids:
+                            c.execute('UPDATE ticket SET statut_id = ? WHERE id = ?', (resolu_id, tid))
+                        conn.commit()
+                conn.close()
+            except Exception:
+                # Avoid crashing the loop
+                pass
+            time.sleep(5)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+# Ensure columns and start watcher when module loads
+ensure_ticket_columns()
+start_resolution_watcher()
 
 @app.route('/')
 def home():
@@ -114,6 +207,16 @@ def ajouter_ticket():
             VALUES (?, ?, ?, ?, ?, ?, 1)
         ''', (titre, description, datetime.now(), user_id, categorie_id, type_id))
         ticket_id = c.lastrowid
+        # Assign to N1 by default if assigned_role_id column exists
+        try:
+            n1_id = get_role_id_by_name('N1')
+            if n1_id is not None:
+                c.execute('PRAGMA table_info(ticket)')
+                cols = [row[1] for row in c.fetchall()]
+                if 'assigned_role_id' in cols:
+                    c.execute('UPDATE ticket SET assigned_role_id = ? WHERE id = ?', (n1_id, ticket_id))
+        except Exception:
+            pass
         conn.commit()
         conn.close()
         flash('Ticket créé avec succès !', 'success')
@@ -179,15 +282,17 @@ def dashboard_admin():
     if 'user_id' not in session or session.get('user_role') not in ['N2']:
         return redirect(url_for('login'))
     nom = session.get('user_nom', '')
-    # Show all tickets for admin
+    user_id = session['user_id']
+    # Show only admin's own tickets (Mes tickets)
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
     c.execute('''
         SELECT t.id, t.titre, t.description, t.date_creation, s.nom as statut
         FROM ticket t
         LEFT JOIN statut s ON t.statut_id = s.id
+        WHERE t.idutilisateur = ?
         ORDER BY t.date_creation DESC
-    ''')
+    ''', (user_id,))
     tickets = c.fetchall()
     conn.close()
     return render_template('dashboard_admin.html', nom=nom, tickets=tickets)
@@ -212,7 +317,7 @@ def dashboard_n1():
     c.execute('SELECT id, nom FROM statut')
     statuts = c.fetchall()
     conn.close()
-    return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
+    return render_template('dashboard_n1.html', nom=nom, tickets=tickets, statuts=statuts)
 
 @app.route('/dashboard-n3')
 def dashboard_n3():
@@ -233,7 +338,7 @@ def dashboard_n3():
     c.execute('SELECT id, nom FROM statut')
     statuts = c.fetchall()
     conn.close()
-    return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
+    return render_template('dashboard_n3.html', nom=nom, tickets=tickets, statuts=statuts)
 
 @app.route('/dashboard-n4')
 def dashboard_n4():
@@ -254,7 +359,431 @@ def dashboard_n4():
     c.execute('SELECT id, nom FROM statut')
     statuts = c.fetchall()
     conn.close()
-    return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
+    return render_template('dashboard_n4.html', nom=nom, tickets=tickets, statuts=statuts)
+
+# ---- Gestion des tickets (N1, N2, N3, N4) ----
+@app.route('/resoudre-tickets')
+def resoudre_tickets():
+    if 'user_id' not in session or session.get('user_role') not in ROLE_ORDER + ['N2']:
+        return redirect(url_for('login'))
+    user_id = session['user_id']
+    role_name = current_role_name()
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Get current role id
+    c.execute('SELECT id FROM role WHERE nom = ?', (role_name,))
+    role_row = c.fetchone()
+    current_role_id = role_row[0] if role_row else None
+
+    # Ensure columns exist (assigned_role_id, required_habilitation_id)
+    c.execute('PRAGMA table_info(ticket)')
+    cols = [row[1] for row in c.fetchall()]
+    has_assigned = 'assigned_role_id' in cols
+    has_required = 'required_habilitation_id' in cols
+
+    # Base select
+    base_select = '''
+        SELECT t.id, t.titre, u.nom_utilisateur as auteur, t.description, t.date_creation,
+               s.nom as statut, t.required_habilitation_id, t.assigned_role_id
+        FROM ticket t
+        JOIN utilisateur u ON u.id = t.idutilisateur
+        LEFT JOIN statut s ON t.statut_id = s.id
+        WHERE 1=1
+    '''
+    params = []
+
+    # Exclude own tickets for roles other than N1 (N1 should also manage their own tickets)
+    if role_name != 'N1':
+        base_select += ' AND t.idutilisateur != ?'
+        params.append(user_id)
+
+    # Scope to assigned role if column exists
+    if has_assigned and current_role_id is not None:
+        # N1 sees tickets assigned to N1 or unassigned; others see only tickets assigned to their role
+        if role_name == 'N1':
+            base_select += ' AND (t.assigned_role_id = ? OR t.assigned_role_id IS NULL)'
+            params.append(current_role_id)
+        else:
+            base_select += ' AND t.assigned_role_id = ?'
+            params.append(current_role_id)
+
+    base_select += ' ORDER BY t.date_creation DESC'
+
+    c.execute(base_select, tuple(params))
+    tickets = c.fetchall()
+
+    # Habilitations list for qualification
+    c.execute('SELECT id, nom, categorie FROM habilitation ORDER BY categorie, nom')
+    habilitations = c.fetchall()
+
+    # Current role habilitations for resolve permission
+    role_hab_ids = set()
+    if role_name in ROLE_ORDER + ['N2']:
+        c.execute('SELECT id FROM role WHERE nom = ?', (role_name,))
+        r = c.fetchone()
+        if r:
+            c.execute('SELECT habilitation_id FROM role_habilitation WHERE role_id = ?', (r[0],))
+            role_hab_ids = {row[0] for row in c.fetchall()}
+
+    conn.close()
+    return render_template('resoudre_tickets.html', tickets=tickets, habilitations=habilitations, role_name=role_name, role_hab_ids=role_hab_ids)
+
+# ---- Gestion des tickets (Admin only) ----
+@app.route('/gestion-tickets')
+def gestion_tickets():
+    if 'user_id' not in session or session.get('user_role') != 'N2':
+        return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Get all tickets with user and status information
+    c.execute('''
+        SELECT t.id, t.titre, u.nom_utilisateur as auteur, t.description, t.date_creation,
+               s.nom as statut, t.required_habilitation_id, t.assigned_role_id,
+               u.prenom, u.nom as nom_utilisateur_complet
+        FROM ticket t
+        JOIN utilisateur u ON u.id = t.idutilisateur
+        LEFT JOIN statut s ON t.statut_id = s.id
+        ORDER BY t.date_creation DESC
+    ''')
+    tickets = c.fetchall()
+    
+    # Get all statuts for dropdown
+    c.execute('SELECT id, nom FROM statut ORDER BY nom')
+    statuts = c.fetchall()
+    
+    # Get all users for dropdown
+    c.execute('SELECT id, nom_utilisateur, prenom, nom FROM utilisateur ORDER BY nom')
+    users = c.fetchall()
+    
+    # Get all categories and types for dropdown
+    c.execute('SELECT id, nom FROM categorie ORDER BY nom')
+    categories = c.fetchall()
+    c.execute('SELECT id, nom FROM type ORDER BY nom')
+    types = c.fetchall()
+    
+    conn.close()
+    
+    return render_template('gestion_tickets.html', tickets=tickets, statuts=statuts, users=users, categories=categories, types=types)
+
+@app.route('/ajouter-ticket-admin', methods=['GET', 'POST'])
+def ajouter_ticket_admin():
+    if 'user_id' not in session or session.get('user_role') != 'N2':
+        return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Get data for dropdowns
+    c.execute('SELECT id, nom FROM categorie ORDER BY nom')
+    categories = c.fetchall()
+    c.execute('SELECT id, nom FROM type ORDER BY nom')
+    types = c.fetchall()
+    c.execute('SELECT id, nom FROM statut ORDER BY nom')
+    statuts = c.fetchall()
+    c.execute('SELECT id, nom_utilisateur, prenom, nom FROM utilisateur ORDER BY nom')
+    users = c.fetchall()
+    
+    if request.method == 'POST':
+        titre = request.form['titre']
+        description = request.form['description']
+        categorie_id = request.form.get('categorie')
+        type_id = request.form.get('type')
+        statut_id = request.form.get('statut')
+        user_id = request.form.get('user_id')
+        
+        # Insert ticket
+        c.execute('''
+            INSERT INTO ticket (titre, description, date_creation, idutilisateur, categorie_id, type_id, statut_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (titre, description, datetime.now(), user_id, categorie_id, type_id, statut_id))
+        
+        conn.commit()
+        conn.close()
+        
+        flash('Ticket créé avec succès !', 'success')
+        return redirect(url_for('gestion_tickets'))
+    
+    conn.close()
+    return render_template('ajouter_ticket_admin.html', categories=categories, types=types, statuts=statuts, users=users)
+
+@app.route('/modifier-ticket/<int:ticket_id>', methods=['GET', 'POST'])
+def modifier_ticket(ticket_id):
+    if 'user_id' not in session or session.get('user_role') != 'N2':
+        return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Get data for dropdowns
+    c.execute('SELECT id, nom FROM categorie ORDER BY nom')
+    categories = c.fetchall()
+    c.execute('SELECT id, nom FROM type ORDER BY nom')
+    types = c.fetchall()
+    c.execute('SELECT id, nom FROM statut ORDER BY nom')
+    statuts = c.fetchall()
+    c.execute('SELECT id, nom_utilisateur, prenom, nom FROM utilisateur ORDER BY nom')
+    users = c.fetchall()
+    
+    if request.method == 'POST':
+        titre = request.form['titre']
+        description = request.form['description']
+        categorie_id = request.form.get('categorie')
+        type_id = request.form.get('type')
+        statut_id = request.form.get('statut')
+        user_id = request.form.get('user_id')
+        
+        # Update ticket
+        c.execute('''
+            UPDATE ticket 
+            SET titre = ?, description = ?, categorie_id = ?, type_id = ?, statut_id = ?, idutilisateur = ?
+            WHERE id = ?
+        ''', (titre, description, categorie_id, type_id, statut_id, user_id, ticket_id))
+        
+        conn.commit()
+        conn.close()
+        
+        flash('Ticket modifié avec succès !', 'success')
+        return redirect(url_for('gestion_tickets'))
+    
+    # Get current ticket data
+    c.execute('''
+        SELECT t.id, t.titre, t.description, t.categorie_id, t.type_id, t.statut_id, t.idutilisateur,
+               u.nom_utilisateur, u.prenom, u.nom
+        FROM ticket t
+        JOIN utilisateur u ON u.id = t.idutilisateur
+        WHERE t.id = ?
+    ''', (ticket_id,))
+    ticket = c.fetchone()
+    
+    if not ticket:
+        conn.close()
+        flash('Ticket non trouvé.', 'error')
+        return redirect(url_for('gestion_tickets'))
+    
+    conn.close()
+    return render_template('modifier_ticket.html', ticket=ticket, categories=categories, types=types, statuts=statuts, users=users)
+
+@app.route('/supprimer-ticket/<int:ticket_id>', methods=['POST'])
+def supprimer_ticket(ticket_id):
+    if 'user_id' not in session or session.get('user_role') != 'N2':
+        return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Delete ticket
+    c.execute('DELETE FROM ticket WHERE id = ?', (ticket_id,))
+    conn.commit()
+    conn.close()
+    
+    flash('Ticket supprimé avec succès !', 'success')
+    return redirect(url_for('gestion_tickets'))
+
+@app.route('/tickets/<int:ticket_id>/qualifier', methods=['POST'])
+def qualifier_ticket(ticket_id: int):
+    if 'user_id' not in session or session.get('user_role') != 'N1':
+        return redirect(url_for('login'))
+    required_hab_id = request.form.get('habilitation_id')
+    if not required_hab_id:
+        flash('Veuillez sélectionner une habilitation.', 'error')
+        return redirect(url_for('resoudre_tickets'))
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Ensure column exists
+    c.execute('PRAGMA table_info(ticket)')
+    cols = [row[1] for row in c.fetchall()]
+    if 'required_habilitation_id' not in cols:
+        flash("Champ 'required_habilitation_id' manquant dans ticket.", 'error')
+        conn.close()
+        return redirect(url_for('resoudre_tickets'))
+    # Set required habilitation and status to 'Incident pris en charge'
+    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident pris en charge',))
+    statut_row = c.fetchone()
+    statut_id = statut_row[0] if statut_row else None
+    c.execute('UPDATE ticket SET required_habilitation_id = ?, statut_id = ? WHERE id = ?', (required_hab_id, statut_id, ticket_id))
+    conn.commit()
+    conn.close()
+    flash('Qualification enregistrée.', 'success')
+    return redirect(url_for('resoudre_tickets'))
+
+@app.route('/tickets/<int:ticket_id>/escalader', methods=['POST'])
+def escalader_ticket(ticket_id: int):
+    if 'user_id' not in session or session.get('user_role') not in ROLE_ORDER + ['N2']:
+        return redirect(url_for('login'))
+    role_name = current_role_name()
+    if role_name == 'N4':
+        flash('Impossible d\'escalader au-delà de N4.', 'error')
+        return redirect(url_for('resoudre_tickets'))
+    # Determine next role
+    next_role = None
+    if role_name in ROLE_ORDER:
+        idx = ROLE_ORDER.index(role_name)
+        if idx < len(ROLE_ORDER) - 1:
+            next_role = ROLE_ORDER[idx + 1]
+    elif role_name == 'N2':
+        next_role = 'N3'  # admin can push towards N3 if acting as dispatcher
+    if not next_role:
+        flash('Rôle suivant introuvable.', 'error')
+        return redirect(url_for('resoudre_tickets'))
+    next_role_id = get_role_id_by_name(next_role)
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('PRAGMA table_info(ticket)')
+    cols = [row[1] for row in c.fetchall()]
+    if 'assigned_role_id' not in cols:
+        flash("Champ 'assigned_role_id' manquant dans ticket.", 'error')
+        conn.close()
+        return redirect(url_for('resoudre_tickets'))
+    # Keep status as pris en charge
+    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident pris en charge',))
+    statut_row = c.fetchone()
+    statut_id = statut_row[0] if statut_row else None
+    c.execute('UPDATE ticket SET assigned_role_id = ?, statut_id = ? WHERE id = ?', (next_role_id, statut_id, ticket_id))
+    conn.commit()
+    conn.close()
+    flash(f'Ticket escaladé vers {next_role}.', 'success')
+    return redirect(url_for('resoudre_tickets'))
+
+@app.route('/tickets/<int:ticket_id>/resoudre', methods=['POST'])
+def resoudre_ticket(ticket_id: int):
+    if 'user_id' not in session or session.get('user_role') not in ROLE_ORDER + ['N2']:
+        return redirect(url_for('login'))
+    role_name = current_role_name()
+    # Allow N4 always; others only if they have the required habilitation
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('PRAGMA table_info(ticket)')
+    cols = [row[1] for row in c.fetchall()]
+    if 'required_habilitation_id' not in cols or 'resolution_due_at' not in cols or 'resolution_attempts' not in cols:
+        flash("Champs de support de résolution manquants dans ticket.", 'error')
+        conn.close()
+        return redirect(url_for('resoudre_tickets'))
+    c.execute('SELECT required_habilitation_id, resolution_attempts FROM ticket WHERE id = ?', (ticket_id,))
+    row = c.fetchone()
+    required_hab_id = row[0] if row else None
+    attempts = row[1] or 0
+    allowed = False
+    if role_name == 'N4':
+        allowed = True
+    elif required_hab_id is not None:
+        # Check role has habilitation
+        role_id = get_role_id_by_name(role_name)
+        c.execute('SELECT 1 FROM role_habilitation WHERE role_id = ? AND habilitation_id = ?', (role_id, required_hab_id))
+        if c.fetchone():
+            allowed = True
+    if not allowed:
+        conn.close()
+        flash("Vous n'avez pas l'habilitation requise pour résoudre ce ticket.", 'error')
+        return redirect(url_for('resoudre_tickets'))
+    # Set status to 'Incident en cours de résolution' and due time
+    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident en cours de résolution',))
+    statut_row = c.fetchone()
+    statut_id = statut_row[0] if statut_row else None
+    minutes = RESOLUTION_MINUTES_BY_ROLE.get(role_name, 2)
+    due_at = datetime.now() + timedelta(minutes=minutes)
+    c.execute('UPDATE ticket SET statut_id = ?, date_mise_a_jour = ?, resolution_due_at = ?, resolution_attempts = ? WHERE id = ?', (statut_id, datetime.now(), due_at, attempts + 1, ticket_id))
+    conn.commit()
+    conn.close()
+    flash(f'Ticket en résolution ({minutes} min).', 'success')
+    return redirect(url_for('resoudre_tickets'))
+
+# Endpoints for requester validation
+@app.route('/tickets/<int:ticket_id>/valider', methods=['POST'])
+def valider_ticket(ticket_id: int):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    # Only the creator can validate/refuse
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('SELECT idutilisateur FROM ticket WHERE id = ?', (ticket_id,))
+    row = c.fetchone()
+    if not row or row[0] != session['user_id']:
+        conn.close()
+        flash("Vous ne pouvez valider que vos propres tickets.", 'error')
+        # Redirect to appropriate dashboard based on user role
+        user_role = session.get('user_role')
+        if user_role == 'N2':
+            return redirect(url_for('dashboard_admin'))
+        elif user_role == 'N1':
+            return redirect(url_for('dashboard_n1'))
+        elif user_role == 'N3':
+            return redirect(url_for('dashboard_n3'))
+        elif user_role == 'N4':
+            return redirect(url_for('dashboard_n4'))
+        else:
+            return redirect(url_for('dashboard_initial'))
+    # Set status to 'Incident clos'
+    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident clos',))
+    srow = c.fetchone()
+    if srow:
+        c.execute('UPDATE ticket SET statut_id = ?, date_cloture = ? WHERE id = ?', (srow[0], datetime.now(), ticket_id))
+        conn.commit()
+    conn.close()
+    flash('Ticket clôturé avec succès.', 'success')
+    # Redirect to appropriate dashboard based on user role
+    user_role = session.get('user_role')
+    if user_role == 'N2':
+        return redirect(url_for('dashboard_admin'))
+    elif user_role == 'N1':
+        return redirect(url_for('dashboard_n1'))
+    elif user_role == 'N3':
+        return redirect(url_for('dashboard_n3'))
+    elif user_role == 'N4':
+        return redirect(url_for('dashboard_n4'))
+    else:
+        return redirect(url_for('dashboard_initial'))
+
+@app.route('/tickets/<int:ticket_id>/refuser', methods=['POST'])
+def refuser_ticket(ticket_id: int):
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    # Only the creator can refuse
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('SELECT idutilisateur, titre FROM ticket WHERE id = ?', (ticket_id,))
+    row = c.fetchone()
+    if not row or row[0] != session['user_id']:
+        conn.close()
+        flash("Vous ne pouvez refuser que vos propres tickets.", 'error')
+        # Redirect to appropriate dashboard based on user role
+        user_role = session.get('user_role')
+        if user_role == 'N2':
+            return redirect(url_for('dashboard_admin'))
+        elif user_role == 'N1':
+            return redirect(url_for('dashboard_n1'))
+        elif user_role == 'N3':
+            return redirect(url_for('dashboard_n3'))
+        elif user_role == 'N4':
+            return redirect(url_for('dashboard_n4'))
+        else:
+            return redirect(url_for('dashboard_initial'))
+    titre = row[1] or ''
+    # Reset status to first step and append note to title
+    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident déclaré',))
+    srow = c.fetchone()
+    new_title = (titre + ' [Retour - solution non concluante]').strip()
+    if srow:
+        # Reset ticket to initial state: clear habilitation and reassign to N1
+        n1_role_id = get_role_id_by_name('N1')
+        c.execute('UPDATE ticket SET statut_id = ?, titre = ?, resolution_due_at = NULL, required_habilitation_id = NULL, assigned_role_id = ? WHERE id = ?', (srow[0], new_title, n1_role_id, ticket_id))
+        conn.commit()
+    conn.close()
+    flash('Ticket renvoyé pour nouveau traitement.', 'success')
+    # Redirect to appropriate dashboard based on user role
+    user_role = session.get('user_role')
+    if user_role == 'N2':
+        return redirect(url_for('dashboard_admin'))
+    elif user_role == 'N1':
+        return redirect(url_for('dashboard_n1'))
+    elif user_role == 'N3':
+        return redirect(url_for('dashboard_n3'))
+    elif user_role == 'N4':
+        return redirect(url_for('dashboard_n4'))
+    else:
+        return redirect(url_for('dashboard_initial'))
 
 # User Management Routes
 @app.route('/gestion-utilisateurs')

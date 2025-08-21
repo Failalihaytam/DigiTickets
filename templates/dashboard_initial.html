@@ -35,6 +35,16 @@
                                     {{ ticket[4] or 'Statut inconnu' }}
                                 </span>
                             </div>
+                            {% if ticket[4] == 'Incident résolu' %}
+                                <div style="display:flex; gap:8px; margin-top:8px;">
+                                    <form method="POST" action="{{ url_for('valider_ticket', ticket_id=ticket[0]) }}">
+                                        <button type="submit" class="dashboard-btn">Valider (OK)</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('refuser_ticket', ticket_id=ticket[0]) }}">
+                                        <button type="submit" class="dashboard-btn" style="background:#dc3545;">Refuser (KO)</button>
+                                    </form>
+                                </div>
+                            {% endif %}
                         </div>
                     {% endfor %}
                 </div>
