@@ -33,16 +33,19 @@ def login():
         conn.close()
         if user:
             user_id, nom, role = user
+            session['user_id'] = user_id
+            session['user_nom'] = nom
+            session['user_role'] = role
             if role == 'initial':
-                session['user_id'] = user_id
-                session['user_nom'] = nom
-                session['user_role'] = role
                 return redirect(url_for('dashboard_initial'))
-            elif role in ['N1', 'N2', 'N3', 'N4']:
-                session['user_id'] = user_id
-                session['user_nom'] = nom
-                session['user_role'] = role
+            elif role == 'N2':
                 return redirect(url_for('dashboard_admin'))
+            elif role == 'N1':
+                return redirect(url_for('dashboard_n1'))
+            elif role == 'N3':
+                return redirect(url_for('dashboard_n3'))
+            elif role == 'N4':
+                return redirect(url_for('dashboard_n4'))
             else:
                 message = "Votre rôle n'est pas autorisé à accéder à ce tableau de bord."
         else:
@@ -111,11 +114,21 @@ def ajouter_ticket():
             VALUES (?, ?, ?, ?, ?, ?, 1)
         ''', (titre, description, datetime.now(), user_id, categorie_id, type_id))
         ticket_id = c.lastrowid
-        # Optionally link the file to the ticket (if you want a ticket_id in fichier, you can update the schema)
-        # For now, just store the file in fichier and ticket in ticket
         conn.commit()
         conn.close()
         flash('Ticket créé avec succès !', 'success')
+        # Redirect to the correct dashboard by role
+        role = session.get('user_role')
+        if role == 'initial':
+            return redirect(url_for('dashboard_initial'))
+        if role == 'N2':
+            return redirect(url_for('dashboard_admin'))
+        if role == 'N1':
+            return redirect(url_for('dashboard_n1'))
+        if role == 'N3':
+            return redirect(url_for('dashboard_n3'))
+        if role == 'N4':
+            return redirect(url_for('dashboard_n4'))
         return redirect(url_for('dashboard_initial'))
     
     return render_template('ajouter_ticket.html', categories=categories, types=types)
@@ -163,7 +176,7 @@ def success():
 
 @app.route('/dashboard-admin')
 def dashboard_admin():
-    if 'user_id' not in session or session.get('user_role') not in ['N1', 'N2', 'N3', 'N4']:
+    if 'user_id' not in session or session.get('user_role') not in ['N2']:
         return redirect(url_for('login'))
     nom = session.get('user_nom', '')
     # Show all tickets for admin
@@ -178,6 +191,70 @@ def dashboard_admin():
     tickets = c.fetchall()
     conn.close()
     return render_template('dashboard_admin.html', nom=nom, tickets=tickets)
+
+# Role-specific dashboards (same first page: create ticket, list own tickets)
+@app.route('/dashboard-n1')
+def dashboard_n1():
+    if 'user_id' not in session or session.get('user_role') != 'N1':
+        return redirect(url_for('login'))
+    user_id = session['user_id']
+    nom = session.get('user_nom', '')
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
+        FROM ticket t
+        LEFT JOIN statut s ON t.statut_id = s.id
+        WHERE t.idutilisateur = ?
+        ORDER BY t.date_creation DESC
+    ''', (user_id,))
+    tickets = c.fetchall()
+    c.execute('SELECT id, nom FROM statut')
+    statuts = c.fetchall()
+    conn.close()
+    return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
+
+@app.route('/dashboard-n3')
+def dashboard_n3():
+    if 'user_id' not in session or session.get('user_role') != 'N3':
+        return redirect(url_for('login'))
+    user_id = session['user_id']
+    nom = session.get('user_nom', '')
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
+        FROM ticket t
+        LEFT JOIN statut s ON t.statut_id = s.id
+        WHERE t.idutilisateur = ?
+        ORDER BY t.date_creation DESC
+    ''', (user_id,))
+    tickets = c.fetchall()
+    c.execute('SELECT id, nom FROM statut')
+    statuts = c.fetchall()
+    conn.close()
+    return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
+
+@app.route('/dashboard-n4')
+def dashboard_n4():
+    if 'user_id' not in session or session.get('user_role') != 'N4':
+        return redirect(url_for('login'))
+    user_id = session['user_id']
+    nom = session.get('user_nom', '')
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
+        FROM ticket t
+        LEFT JOIN statut s ON t.statut_id = s.id
+        WHERE t.idutilisateur = ?
+        ORDER BY t.date_creation DESC
+    ''', (user_id,))
+    tickets = c.fetchall()
+    c.execute('SELECT id, nom FROM statut')
+    statuts = c.fetchall()
+    conn.close()
+    return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
 
 # User Management Routes
 @app.route('/gestion-utilisateurs')
