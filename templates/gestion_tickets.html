@@ -196,7 +196,7 @@
         <div class="card">
             <div class="tickets-header">
                 <h2>Gestion des Tickets</h2>
-                <a href="{{ url_for('ajouter_ticket_admin') }}" class="dashboard-btn">Ajouter un ticket</a>
+                <a href="{{ url_for('ajouter_ticket') }}" class="dashboard-btn">Ajouter un ticket</a>
             </div>
             
             {% with messages = get_flashed_messages(with_categories=true) %}
