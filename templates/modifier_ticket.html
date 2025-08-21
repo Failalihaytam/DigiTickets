@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Ajouter un Utilisateur - DigiTickets</title>
+    <title>Modifier un Ticket - Admin - DigiTickets</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
         body {
@@ -49,7 +49,7 @@
             margin-bottom: 32px;
         }
         .form-container {
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
         }
         .form-group {
@@ -62,7 +62,8 @@
             color: #495057;
         }
         .form-group input,
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             width: 100%;
             padding: 12px;
             border: 1px solid #ced4da;
@@ -71,10 +72,15 @@
             transition: border-color 0.2s;
         }
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             outline: none;
             border-color: #7A9B41;
             box-shadow: 0 0 0 2px rgba(122, 155, 65, 0.2);
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 120px;
         }
         .form-row {
             display: grid;
@@ -112,12 +118,6 @@
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
-        .role-description {
-            font-size: 0.875rem;
-            color: #6c757d;
-            margin-top: 4px;
-            font-style: italic;
-        }
         @media (max-width: 900px) {
             body { flex-direction: column; }
             .sidebar { 
@@ -148,6 +148,7 @@
         </div>
         <a href="{{ url_for('dashboard_admin') }}">Tableau de bord</a>
         <a href="{{ url_for('resoudre_tickets') }}">Résoudre tickets</a>
+        <a href="{{ url_for('gestion_tickets') }}">Gestion des tickets</a>
         <a href="{{ url_for('gestion_utilisateurs') }}">Gestion des utilisateurs</a>
         <a href="{{ url_for('gestion_habilitations') }}">Gestion des habilitations</a>
         <a href="{{ url_for('logout') }}">Se déconnecter</a>
@@ -155,7 +156,7 @@
     <div class="main-content">
         <div class="card">
             <div class="form-container">
-                <h2>Ajouter un Utilisateur</h2>
+                <h2>Modifier le Ticket #{{ ticket[0] }}</h2>
                 
                 {% with messages = get_flashed_messages(with_categories=true) %}
                     {% if messages %}
@@ -171,64 +172,66 @@
                 
                 <form method="POST">
                     <div class="form-group">
-                        <label for="nom_utilisateur">Nom d'utilisateur *</label>
-                        <input type="text" id="nom_utilisateur" name="nom_utilisateur" required>
+                        <label for="titre">Titre du ticket *</label>
+                        <input type="text" id="titre" name="titre" value="{{ ticket[1] }}" required>
                     </div>
                     
                     <div class="form-group">
-                        <label for="email">Email *</label>
-                        <input type="email" id="email" name="email" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="mot_de_passe">Mot de passe *</label>
-                        <input type="password" id="mot_de_passe" name="mot_de_passe" required>
+                        <label for="description">Description *</label>
+                        <textarea id="description" name="description" required>{{ ticket[2] }}</textarea>
                     </div>
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="prenom">Prénom *</label>
-                            <input type="text" id="prenom" name="prenom" required>
+                            <label for="categorie">Catégorie</label>
+                            <select id="categorie" name="categorie">
+                                <option value="">Sélectionner une catégorie</option>
+                                {% for categorie in categories %}
+                                    <option value="{{ categorie[0] }}" {{ 'selected' if categorie[0] == ticket[3] else '' }}>{{ categorie[1] }}</option>
+                                {% endfor %}
+                            </select>
                         </div>
                         
                         <div class="form-group">
-                            <label for="nom">Nom *</label>
-                            <input type="text" id="nom" name="nom" required>
+                            <label for="type">Type</label>
+                            <select id="type" name="type">
+                                <option value="">Sélectionner un type</option>
+                                {% for type in types %}
+                                    <option value="{{ type[0] }}" {{ 'selected' if type[0] == ticket[4] else '' }}>{{ type[1] }}</option>
+                                {% endfor %}
+                            </select>
                         </div>
                     </div>
                     
-                    <div class="form-group">
-                        <label for="role_id">Rôle *</label>
-                        <select id="role_id" name="role_id" required onchange="updateRoleDescription()">
-                            <option value="">Sélectionner un rôle</option>
-                            {% for role in roles %}
-                                <option value="{{ role[0] }}" data-description="{{ role[2] }}">{{ role[1] }}</option>
-                            {% endfor %}
-                        </select>
-                        <div id="role-description" class="role-description"></div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="user_id">Utilisateur *</label>
+                            <select id="user_id" name="user_id" required>
+                                <option value="">Sélectionner un utilisateur</option>
+                                {% for user in users %}
+                                    <option value="{{ user[0] }}" {{ 'selected' if user[0] == ticket[6] else '' }}>{{ user[2] }} {{ user[3] }} ({{ user[1] }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="statut">Statut *</label>
+                            <select id="statut" name="statut" required>
+                                <option value="">Sélectionner un statut</option>
+                                {% for statut in statuts %}
+                                    <option value="{{ statut[0] }}" {{ 'selected' if statut[0] == ticket[5] else '' }}>{{ statut[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
                     </div>
                     
                     <div class="form-actions">
-                        <a href="{{ url_for('gestion_utilisateurs') }}" class="btn-secondary">Annuler</a>
-                        <button type="submit" class="dashboard-btn">Ajouter l'utilisateur</button>
+                        <a href="{{ url_for('gestion_tickets') }}" class="btn-secondary">Annuler</a>
+                        <button type="submit" class="dashboard-btn">Modifier le ticket</button>
                     </div>
                 </form>
             </div>
         </div>
     </div>
-    
-    <script>
-        function updateRoleDescription() {
-            const select = document.getElementById('role_id');
-            const descriptionDiv = document.getElementById('role-description');
-            const selectedOption = select.options[select.selectedIndex];
-            
-            if (selectedOption && selectedOption.dataset.description) {
-                descriptionDiv.textContent = selectedOption.dataset.description;
-            } else {
-                descriptionDiv.textContent = '';
-            }
-        }
-    </script>
 </body>
 </html> 
