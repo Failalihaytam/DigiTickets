@@ -392,12 +392,7 @@ def resoudre_tickets():
         WHERE 1=1
     '''
     params = []
-
-    # Exclude own tickets for roles other than N1 (N1 should also manage their own tickets)
-    if role_name != 'N1':
-        base_select += ' AND t.idutilisateur != ?'
-        params.append(user_id)
-
+    
     # Scope to assigned role if column exists
     if has_assigned and current_role_id is not None:
         # N1 sees tickets assigned to N1 or unassigned; others see only tickets assigned to their role
