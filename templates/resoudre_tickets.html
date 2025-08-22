@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+	<meta charset="UTF-8">
+	<title>Résoudre tickets - DigiTickets</title>
+	<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+	<style>
+		.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+		.tickets-table { width:100%; border-collapse: collapse; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+		.tickets-table th, .tickets-table td { padding:12px 14px; border-bottom:1px solid #e9ecef; text-align:left; vertical-align: top; }
+		.tickets-table th { background:#f8f9fa; color:#495057; font-weight:600; }
+		.row-actions { display:flex; gap:8px; }
+		.btn { display:inline-block; padding:8px 12px; border-radius:6px; border:none; cursor:pointer; font-size:0.95rem; text-decoration:none; }
+		.btn-primary { background:#7A9B41; color:#fff; }
+		.btn-secondary { background:#e9ecef; color:#212529; }
+		.btn-disabled { background:#e9ecef; color:#adb5bd; cursor:not-allowed; }
+		.badge { padding:4px 8px; border-radius:10px; font-size:0.8rem; background:#f1f3f5; color:#495057; }
+		.small { font-size:0.85rem; color:#6c757d; }
+		.qualifier-form { display:flex; gap:8px; align-items:center; }
+		@media (max-width: 800px) {
+			.tickets-table, .tickets-table thead, .tickets-table tbody, .tickets-table th, .tickets-table td, .tickets-table tr { display:block; }
+			.tickets-table tr { margin-bottom:12px; border:1px solid #e9ecef; border-radius:8px; padding:8px; }
+			.tickets-table th { display:none; }
+			.tickets-table td { border:0; padding:6px 8px; }
+		}
+	</style>
+</head>
+<body>
+	<div class="logo-container">
+		<img src="{{ url_for('static', filename='Logotype@2x.png') }}" alt="CDG Logo" class="logo-img">
+		<div class="app-name">DigiTickets</div>
+	</div>
+	<div class="card">
+		<div class="page-header">
+			<h2>Résoudre tickets</h2>
+			<div>
+				<a href="{{ url_for('ajouter_ticket') }}" class="btn btn-primary">Ajouter un ticket</a>
+				<a href="{% if session.get('user_role') == 'N2' %}{{ url_for('dashboard_admin') }}{% elif session.get('user_role') == 'N1' %}{{ url_for('dashboard_n1') }}{% elif session.get('user_role') == 'N3' %}{{ url_for('dashboard_n3') }}{% elif session.get('user_role') == 'N4' %}{{ url_for('dashboard_n4') }}{% else %}{{ url_for('dashboard_initial') }}{% endif %}" class="btn btn-secondary">Retour au tableau de bord</a>
+			</div>
+		</div>
+
+		<table class="tickets-table">
+			<thead>
+				<tr>
+					<th>Ticket</th>
+					<th>Auteur</th>
+					<th>Création</th>
+					<th>Statut</th>
+					<th>Habilitation requise</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				{% for t in tickets %}
+					{# t = (id, titre, auteur, description, date_creation, statut, required_hab_id, assigned_role_id) #}
+					{% set required_hab_id = t[6] %}
+					<tr>
+						<td>
+							<div><strong>{{ t[1] }}</strong></div>
+							<div class="small">{{ t[3][:120] + '...' if t[3] and t[3]|length>120 else t[3] }}</div>
+						</td>
+						<td>{{ t[2] }}</td>
+						<td>{{ t[4][:19] if t[4] else '—' }}</td>
+						<td><span class="badge">{{ t[5] or '—' }}</span></td>
+						<td>
+							{% if role_name == 'N1' and not required_hab_id %}
+								<form class="qualifier-form" method="POST" action="{{ url_for('qualifier_ticket', ticket_id=t[0]) }}">
+									<select name="habilitation_id" required>
+										<option value="">Sélectionner...</option>
+										{% for h in habilitations %}
+											<option value="{{ h[0] }}">{{ h[1] }} ({{ h[2] }})</option>
+										{% endfor %}
+									</select>
+									<button type="submit" class="btn btn-primary">Qualifier</button>
+								</form>
+							{% else %}
+								{% if required_hab_id %}
+									<div class="small">#{{ required_hab_id }}</div>
+								{% else %}
+									<span class="small">—</span>
+								{% endif %}
+							{% endif %}
+						</td>
+						<td>
+							<div class="row-actions">
+								{# Actions appear only after qualification #}
+								{% if required_hab_id %}
+									{# Hide actions if ticket is already in resolution process, resolved, or closed #}
+									{% if t[5] == 'Incident en cours de résolution' %}
+										<span class="small">Ticket en cours de résolution...</span>
+									{% elif t[5] == 'Incident résolu' %}
+										<span class="small">Ticket résolu - en attente de validation</span>
+									{% elif t[5] == 'Incident clos' %}
+										<span class="small">Ticket clos</span>
+									{% else %}
+										{# Decide which single action to show #}
+										{% set can_resolve = (role_name == 'N4') or (required_hab_id in role_hab_ids) %}
+										{% if can_resolve %}
+											<form method="POST" action="{{ url_for('resoudre_ticket', ticket_id=t[0]) }}">
+												<button type="submit" class="btn btn-primary">Résoudre</button>
+											</form>
+										{% else %}
+											<form method="POST" action="{{ url_for('escalader_ticket', ticket_id=t[0]) }}">
+												<button type="submit" class="btn btn-secondary" {% if role_name == 'N4' %}disabled class="btn-disabled"{% endif %}>Escalader</button>
+											</form>
+										{% endif %}
+									{% endif %}
+								{% else %}
+									<span class="small">Qualifiez le ticket pour afficher les actions</span>
+								{% endif %}
+							</div>
+						</td>
+					</tr>
+				{% endfor %}
+				{% if not tickets %}
+					<tr><td colspan="6" class="small">Aucun ticket à gérer pour le moment.</td></tr>
+				{% endif %}
+			</tbody>
+		</table>
+	</div>
+</body>
+</html>
+<!---->
