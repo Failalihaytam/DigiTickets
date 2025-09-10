@@ -1,0 +1,79 @@
+<style>
+	#dt-chatbot-btn{
+		position:fixed; right:20px; bottom:20px; z-index:9999;
+		width:56px; height:56px; border-radius:50%; border:none; cursor:pointer;
+		background:#7A9B41; color:#fff; font-size:24px; box-shadow:0 6px 16px rgba(0,0,0,.2);
+	}
+	#dt-chatbot-popup{
+		position:fixed; right:20px; bottom:86px; z-index:9999;
+		width:360px; max-width:92vw; height:480px; max-height:76vh;
+		background:#ffffff; border-radius:12px; box-shadow:0 8px 28px rgba(0,0,0,.25);
+		display:none; overflow:hidden; border:1px solid #e9ecef;
+	}
+	#dt-chatbot-header{
+		background:#f4f7f2; padding:10px 12px; display:flex; align-items:center; justify-content:space-between;
+		border-bottom:1px solid #e9ecef; font-weight:600; color:#373F41;
+	}
+	#dt-chatbot-close{ background:transparent; border:none; font-size:18px; cursor:pointer; color:#6c757d; }
+	#dt-chatbot-body{ display:flex; flex-direction:column; height:calc(100% - 48px); }
+	#dt-chatbot-messages{ flex:1; padding:10px; overflow:auto; background:#fafafa; }
+	.dt-msg{ max-width:80%; margin:6px 0; padding:8px 12px; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; }
+	.dt-user{ margin-left:auto; background:#22c55e; color:#0b1020; border-bottom-right-radius:4px; }
+	.dt-bot{ margin-right:auto; background:#e9ecef; color:#212529; border-bottom-left-radius:4px; }
+	#dt-chatbot-input{ display:flex; gap:6px; padding:8px; border-top:1px solid #e9ecef; background:#fff; }
+	#dt-chatbot-text{ flex:1; padding:10px 12px; border:1px solid #ced4da; border-radius:10px; font-size:14px; }
+	#dt-chatbot-send{ padding:10px 14px; border:none; border-radius:10px; background:#7A9B41; color:#fff; cursor:pointer; }
+	@media (max-width:480px){ #dt-chatbot-popup{ width:94vw; right:3vw; } }
+</style>
+
+<button id="dt-chatbot-btn" aria-label="Ouvrir le chatbot">💬</button>
+<div id="dt-chatbot-popup" role="dialog" aria-label="Chatbot DigiTickets">
+	<div id="dt-chatbot-header">
+		<span>Chatbot DigiTickets</span>
+		<button id="dt-chatbot-close" aria-label="Fermer">✕</button>
+	</div>
+	<div id="dt-chatbot-body">
+		<div id="dt-chatbot-messages"></div>
+		<div id="dt-chatbot-input">
+			<input id="dt-chatbot-text" type="text" placeholder="Votre question…" />
+			<button id="dt-chatbot-send">Envoyer</button>
+		</div>
+	</div>
+</div>
+
+<script>
+(function(){
+	const btn = document.getElementById('dt-chatbot-btn');
+	const pop = document.getElementById('dt-chatbot-popup');
+	const closeBtn = document.getElementById('dt-chatbot-close');
+	const messages = document.getElementById('dt-chatbot-messages');
+	const input = document.getElementById('dt-chatbot-text');
+	const send = document.getElementById('dt-chatbot-send');
+	const RAG_URL = 'http://127.0.0.1:8000/chat';
+
+	function toggle(){ pop.style.display = (pop.style.display==='block' ? 'none' : 'block'); if(pop.style.display==='block'){ input.focus(); } }
+	function addMsg(text, who){
+		const d = document.createElement('div');
+		d.className = 'dt-msg ' + (who === 'user' ? 'dt-user' : 'dt-bot');
+		d.textContent = text;
+		messages.appendChild(d);
+		messages.scrollTop = messages.scrollHeight;
+	}
+	async function ask(){
+		const q = (input.value || '').trim();
+		if(!q) return; input.value=''; addMsg(q,'user');
+		const typing = document.createElement('div'); typing.className='dt-msg dt-bot'; typing.textContent='…'; messages.appendChild(typing); messages.scrollTop = messages.scrollHeight;
+		try{
+			const res = await fetch(RAG_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message:q}) });
+			const data = await res.json();
+			typing.remove();
+			addMsg((data && data.answer) ? data.answer : '—', 'bot');
+		}catch(e){ typing.remove(); addMsg('[Erreur RAG] ' + e, 'bot'); }
+	}
+
+	btn.addEventListener('click', toggle);
+	closeBtn.addEventListener('click', toggle);
+	send.addEventListener('click', ask);
+	input.addEventListener('keydown', function(e){ if(e.key==='Enter'){ ask(); }});
+})();
+</script>
