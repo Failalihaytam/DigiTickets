@@ -927,8 +927,8 @@ def gestion_habilitations_role(role_id):
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    # Get role info
-    role_data = db.get_user_by_id(role_id)  # This will get role info
+    # Get role info (fix: query role table, not users)
+    role_data = db.get_role_by_id(role_id)
     if not role_data:
         flash('Rôle non trouvé.', 'error')
         return redirect(url_for('gestion_habilitations'))

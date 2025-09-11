@@ -15,10 +15,20 @@ load_dotenv()
 class SupabaseDB:
     def __init__(self):
         self.supabase_url = os.environ.get("SUPABASE_URL")
-        self.supabase_key = os.environ.get("SUPABASE_KEY")
+        # Prefer service role key if available; fallback to explicit key, then anon
+        self.supabase_key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_KEY")
+            or os.environ.get("SUPABASE_ANON_KEY")
+        )
+        # Request timeout (seconds)
+        try:
+            self.request_timeout = float(os.environ.get("SUPABASE_REQUEST_TIMEOUT", "20"))
+        except ValueError:
+            self.request_timeout = 20.0
         
         if not self.supabase_url or not self.supabase_key:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+            raise ValueError("SUPABASE_URL and a Supabase key must be set (SERVICE_ROLE/KEY/ANON)")
         
         # Remove trailing slash from URL
         self.supabase_url = self.supabase_url.rstrip('/')
@@ -35,13 +45,13 @@ class SupabaseDB:
         
         try:
             if method.upper() == "GET":
-                response = requests.get(url, headers=headers, params=params)
+                response = requests.get(url, headers=headers, params=params, timeout=self.request_timeout)
             elif method.upper() == "POST":
-                response = requests.post(url, headers=headers, json=data)
+                response = requests.post(url, headers=headers, json=data, timeout=self.request_timeout)
             elif method.upper() == "PATCH":
-                response = requests.patch(url, headers=headers, json=data)
+                response = requests.patch(url, headers=headers, json=data, timeout=self.request_timeout)
             elif method.upper() == "DELETE":
-                response = requests.delete(url, headers=headers)
+                response = requests.delete(url, headers=headers, timeout=self.request_timeout)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
@@ -51,7 +61,11 @@ class SupabaseDB:
         except requests.exceptions.RequestException as e:
             print(f"Supabase API request failed: {e}")
             if hasattr(e, 'response') and e.response is not None:
-                print(f"Response content: {e.response.text}")
+                try:
+                    print(f"Status: {e.response.status_code}")
+                    print(f"Response content: {e.response.text}")
+                except Exception:
+                    pass
             raise
     
     # User operations
@@ -130,6 +144,15 @@ class SupabaseDB:
         except Exception as e:
             print(f"Error getting all roles: {e}")
             return []
+    
+    def get_role_by_id(self, role_id):
+        """Get role by ID"""
+        try:
+            result = self._make_request("GET", f"role?id=eq.{role_id}&select=id,nom,description")
+            return result[0] if result else None
+        except Exception as e:
+            print(f"Error getting role by ID: {e}")
+            return None
     
     # Ticket operations
     def get_user_tickets(self, user_id):
