@@ -49,7 +49,7 @@
 	const messages = document.getElementById('dt-chatbot-messages');
 	const input = document.getElementById('dt-chatbot-text');
 	const send = document.getElementById('dt-chatbot-send');
-	const RAG_URL = 'http://127.0.0.1:8000/chat';
+	const RAG_URL = 'https://digitickets-chatbot.vercel.app/chat';
 
 	function toggle(){ pop.style.display = (pop.style.display==='block' ? 'none' : 'block'); if(pop.style.display==='block'){ input.focus(); } }
 	function addMsg(text, who){
