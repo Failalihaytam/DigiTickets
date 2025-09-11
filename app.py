@@ -1,5 +1,4 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session
-import sqlite3
 import smtplib
 from email.mime.text import MIMEText
 import os
@@ -7,6 +6,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import threading
 import time
+from supabase_db import db
 load_dotenv()
 
 app = Flask(__name__)
@@ -22,41 +22,15 @@ RESOLUTION_MINUTES_BY_ROLE = {
     'N4': 4,
 }
 
-def get_db_connection():
-    return sqlite3.connect('database.db')
-
 def get_role_id_by_name(role_name: str):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('SELECT id FROM role WHERE nom = ?', (role_name,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
+    return db.get_role_by_name(role_name)
 
 def current_role_name():
     return session.get('user_role')
 
 def ensure_ticket_columns():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('PRAGMA table_info(ticket)')
-    cols = {row[1] for row in c.fetchall()}
-    to_add = []
-    if 'assigned_role_id' not in cols:
-        to_add.append('ALTER TABLE ticket ADD COLUMN assigned_role_id INTEGER')
-    if 'required_habilitation_id' not in cols:
-        to_add.append('ALTER TABLE ticket ADD COLUMN required_habilitation_id INTEGER')
-    if 'resolution_due_at' not in cols:
-        to_add.append('ALTER TABLE ticket ADD COLUMN resolution_due_at DATETIME')
-    if 'resolution_attempts' not in cols:
-        to_add.append('ALTER TABLE ticket ADD COLUMN resolution_attempts INTEGER DEFAULT 0')
-    for sql in to_add:
-        try:
-            c.execute(sql)
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
+    # No longer needed with Supabase - schema is already defined
+    pass
 
 # Background watcher to auto-mark tickets as resolved when due
 _watcher_started = False
@@ -70,31 +44,18 @@ def start_resolution_watcher():
     def _loop():
         while True:
             try:
-                conn = get_db_connection()
-                c = conn.cursor()
-                # Get statut IDs
-                c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident en cours de résolution',))
-                row_in_progress = c.fetchone()
-                c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident résolu',))
-                row_resolu = c.fetchone()
-                if row_in_progress and row_resolu:
-                    in_progress_id = row_in_progress[0]
-                    resolu_id = row_resolu[0]
-                    now = datetime.now()
-                    # Find tickets due
-                    c.execute('''
-                        SELECT id FROM ticket
-                        WHERE statut_id = ? AND resolution_due_at IS NOT NULL AND resolution_due_at <= ?
-                    ''', (in_progress_id, now))
-                    due_ids = [r[0] for r in c.fetchall()]
-                    if due_ids:
-                        for tid in due_ids:
-                            c.execute('UPDATE ticket SET statut_id = ? WHERE id = ?', (resolu_id, tid))
-                        conn.commit()
-                conn.close()
-            except Exception:
-                # Avoid crashing the loop
-                pass
+                # Get status IDs
+                in_progress_id = db.get_status_by_name('Incident en cours de résolution')
+                resolved_id = db.get_status_by_name('Incident résolu')
+                
+                if in_progress_id and resolved_id:
+                    # Find tickets due for resolution
+                    due_tickets = db.get_tickets_due_for_resolution()
+                    if due_tickets:
+                        for ticket in due_tickets:
+                            db.update_ticket_status(ticket['id'], resolved_id)
+            except Exception as e:
+                print(f"Resolution watcher error: {e}")
             time.sleep(5)
 
     t = threading.Thread(target=_loop, daemon=True)
@@ -114,16 +75,8 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        c.execute('''
-            SELECT u.id, u.nom, r.nom as role_nom 
-            FROM utilisateur u 
-            JOIN role r ON u.role_id = r.id 
-            WHERE u.nom_utilisateur=? AND u.mot_de_passe=?
-        ''', (username, password))
-        user = c.fetchone()
-        conn.close()
+        
+        user = db.get_user_by_credentials(username, password)
         if user:
             user_id, nom, role = user
             session['user_id'] = user_id
@@ -153,20 +106,13 @@ def dashboard_initial():
     nom = session.get('user_nom', '')
     
     # Get user's tickets
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
-        FROM ticket t
-        LEFT JOIN statut s ON t.statut_id = s.id
-        WHERE t.idutilisateur = ?
-        ORDER BY t.date_creation DESC
-    ''', (user_id,))
-    tickets = c.fetchall()
-    # Get all statuts for dropdowns or display
-    c.execute('SELECT id, nom FROM statut')
-    statuts = c.fetchall()
-    conn.close()
+    tickets_data = db.get_user_tickets(user_id)
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in tickets_data]
+    
+    # Get all statuses
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
     
     return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
 
@@ -174,13 +120,12 @@ def dashboard_initial():
 def ajouter_ticket():
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('SELECT id, nom FROM categorie')
-    categories = c.fetchall()
-    c.execute('SELECT id, nom FROM type')
-    types = c.fetchall()
-    conn.close()
+    
+    # Get categories and types
+    categories_data = db.get_all_categories()
+    categories = [(c['id'], c['nom']) for c in categories_data]
+    types_data = db.get_all_types()
+    types = [(t['id'], t['nom']) for t in types_data]
     
     if request.method == 'POST':
         titre = request.form['titre']
@@ -188,49 +133,49 @@ def ajouter_ticket():
         categorie_id = request.form.get('categorie')
         type_id = request.form.get('type')
         user_id = session['user_id']
-        fichier_id = None
+        
         # Handle file upload
         file = request.files.get('fichier')
+        fichier_id = None
         if file and file.filename:
             file_data = file.read()
-            conn = sqlite3.connect('database.db')
-            c = conn.cursor()
-            c.execute('INSERT INTO fichier (fichier) VALUES (?)', (file_data,))
-            fichier_id = c.lastrowid
-            conn.commit()
-            conn.close()
-        # Insert ticket
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO ticket (titre, description, date_creation, idutilisateur, categorie_id, type_id, statut_id)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
-        ''', (titre, description, datetime.now(), user_id, categorie_id, type_id))
-        ticket_id = c.lastrowid
-        # Assign to N1 by default if assigned_role_id column exists
-        try:
+            file_record = db.create_file({'fichier': file_data.hex()})  # Convert to hex for storage
+            fichier_id = file_record['id'] if file_record else None
+        
+        # Create ticket data
+        ticket_data = {
+            'titre': titre,
+            'description': description,
+            'date_creation': datetime.now().isoformat(),
+            'idutilisateur': user_id,
+            'categorie_id': int(categorie_id) if categorie_id else None,
+            'type_id': int(type_id) if type_id else None,
+            'statut_id': 1  # Incident déclaré
+        }
+        
+        # Create ticket
+        ticket = db.create_ticket(ticket_data)
+        if ticket:
+            # Assign to N1 by default
             n1_id = get_role_id_by_name('N1')
-            if n1_id is not None:
-                c.execute('PRAGMA table_info(ticket)')
-                cols = [row[1] for row in c.fetchall()]
-                if 'assigned_role_id' in cols:
-                    c.execute('UPDATE ticket SET assigned_role_id = ? WHERE id = ?', (n1_id, ticket_id))
-        except Exception:
-            pass
-        conn.commit()
-        conn.close()
-        flash('Ticket créé avec succès !', 'success')
+            if n1_id:
+                db.update_ticket(ticket['id'], {'assigned_role_id': n1_id})
+            
+            flash('Ticket créé avec succès !', 'success')
+        else:
+            flash('Erreur lors de la création du ticket', 'error')
+        
         # Redirect to the correct dashboard by role
         role = session.get('user_role')
         if role == 'initial':
             return redirect(url_for('dashboard_initial'))
-        if role == 'N2':
+        elif role == 'N2':
             return redirect(url_for('dashboard_admin'))
-        if role == 'N1':
+        elif role == 'N1':
             return redirect(url_for('dashboard_n1'))
-        if role == 'N3':
+        elif role == 'N3':
             return redirect(url_for('dashboard_n3'))
-        if role == 'N4':
+        elif role == 'N4':
             return redirect(url_for('dashboard_n4'))
         return redirect(url_for('dashboard_initial'))
     
@@ -247,13 +192,17 @@ def forgot_password():
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        c.execute('SELECT mot_de_passe FROM utilisateur WHERE nom_utilisateur=? AND email=?', (username, email))
-        result = c.fetchone()
-        conn.close()
-        if result:
-            password = result[0]
+        
+        # Check if user exists with matching username and email
+        users = db.get_all_users()
+        user = None
+        for u in users:
+            if u['nom_utilisateur'] == username and u['email'] == email:
+                user = u
+                break
+        
+        if user:
+            password = user['mot_de_passe']
             try:
                 sender = os.environ.get('GMAIL_USER')
                 app_password = os.environ.get('GMAIL_APP_PASSWORD')
@@ -283,18 +232,12 @@ def dashboard_admin():
         return redirect(url_for('login'))
     nom = session.get('user_nom', '')
     user_id = session['user_id']
+    
     # Show only admin's own tickets (Mes tickets)
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT t.id, t.titre, t.description, t.date_creation, s.nom as statut
-        FROM ticket t
-        LEFT JOIN statut s ON t.statut_id = s.id
-        WHERE t.idutilisateur = ?
-        ORDER BY t.date_creation DESC
-    ''', (user_id,))
-    tickets = c.fetchall()
-    conn.close()
+    tickets_data = db.get_user_tickets(user_id)
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in tickets_data]
+    
     return render_template('dashboard_admin.html', nom=nom, tickets=tickets)
 
 # Role-specific dashboards (same first page: create ticket, list own tickets)
@@ -304,19 +247,14 @@ def dashboard_n1():
         return redirect(url_for('login'))
     user_id = session['user_id']
     nom = session.get('user_nom', '')
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
-        FROM ticket t
-        LEFT JOIN statut s ON t.statut_id = s.id
-        WHERE t.idutilisateur = ?
-        ORDER BY t.date_creation DESC
-    ''', (user_id,))
-    tickets = c.fetchall()
-    c.execute('SELECT id, nom FROM statut')
-    statuts = c.fetchall()
-    conn.close()
+    
+    tickets_data = db.get_user_tickets(user_id)
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in tickets_data]
+    
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    
     return render_template('dashboard_n1.html', nom=nom, tickets=tickets, statuts=statuts)
 
 @app.route('/dashboard-n3')
@@ -325,19 +263,14 @@ def dashboard_n3():
         return redirect(url_for('login'))
     user_id = session['user_id']
     nom = session.get('user_nom', '')
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
-        FROM ticket t
-        LEFT JOIN statut s ON t.statut_id = s.id
-        WHERE t.idutilisateur = ?
-        ORDER BY t.date_creation DESC
-    ''', (user_id,))
-    tickets = c.fetchall()
-    c.execute('SELECT id, nom FROM statut')
-    statuts = c.fetchall()
-    conn.close()
+    
+    tickets_data = db.get_user_tickets(user_id)
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in tickets_data]
+    
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    
     return render_template('dashboard_n3.html', nom=nom, tickets=tickets, statuts=statuts)
 
 @app.route('/dashboard-n4')
@@ -346,19 +279,14 @@ def dashboard_n4():
         return redirect(url_for('login'))
     user_id = session['user_id']
     nom = session.get('user_nom', '')
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT t.id, t.titre, t.description, t.date_creation, s.nom
-        FROM ticket t
-        LEFT JOIN statut s ON t.statut_id = s.id
-        WHERE t.idutilisateur = ?
-        ORDER BY t.date_creation DESC
-    ''', (user_id,))
-    tickets = c.fetchall()
-    c.execute('SELECT id, nom FROM statut')
-    statuts = c.fetchall()
-    conn.close()
+    
+    tickets_data = db.get_user_tickets(user_id)
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in tickets_data]
+    
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    
     return render_template('dashboard_n4.html', nom=nom, tickets=tickets, statuts=statuts)
 
 # ---- Gestion des tickets (N1, N2, N3, N4) ----
@@ -366,62 +294,46 @@ def dashboard_n4():
 def resoudre_tickets():
     if 'user_id' not in session or session.get('user_role') not in ROLE_ORDER + ['N2']:
         return redirect(url_for('login'))
+    
     user_id = session['user_id']
     role_name = current_role_name()
-    conn = get_db_connection()
-    c = conn.cursor()
+    current_role_id = get_role_id_by_name(role_name)
 
-    # Get current role id
-    c.execute('SELECT id FROM role WHERE nom = ?', (role_name,))
-    role_row = c.fetchone()
-    current_role_id = role_row[0] if role_row else None
+    # Get tickets based on role
+    if role_name == 'N1':
+        # N1 sees tickets assigned to N1 or unassigned
+        tickets_data = db.get_tickets_by_role(current_role_id) if current_role_id else []
+        # Also get unassigned tickets
+        unassigned_tickets = db._make_request("GET", "ticket?assigned_role_id=is.null&select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur),required_habilitation_id,assigned_role_id&order=date_creation.desc")
+        tickets_data.extend(unassigned_tickets)
+    else:
+        # Others see only tickets assigned to their role
+        tickets_data = db.get_tickets_by_role(current_role_id) if current_role_id else []
 
-    # Ensure columns exist (assigned_role_id, required_habilitation_id)
-    c.execute('PRAGMA table_info(ticket)')
-    cols = [row[1] for row in c.fetchall()]
-    has_assigned = 'assigned_role_id' in cols
-    has_required = 'required_habilitation_id' in cols
+    # Format tickets for template
+    tickets = []
+    for t in tickets_data:
+        tickets.append((
+            t['id'], 
+            t['titre'], 
+            t['utilisateur']['nom_utilisateur'], 
+            t['description'], 
+            t['date_creation'],
+            t['statut']['nom'], 
+            t.get('required_habilitation_id'), 
+            t.get('assigned_role_id')
+        ))
 
-    # Base select
-    base_select = '''
-        SELECT t.id, t.titre, u.nom_utilisateur as auteur, t.description, t.date_creation,
-               s.nom as statut, t.required_habilitation_id, t.assigned_role_id
-        FROM ticket t
-        JOIN utilisateur u ON u.id = t.idutilisateur
-        LEFT JOIN statut s ON t.statut_id = s.id
-        WHERE 1=1
-    '''
-    params = []
-    
-    # Scope to assigned role if column exists
-    if has_assigned and current_role_id is not None:
-        # N1 sees tickets assigned to N1 or unassigned; others see only tickets assigned to their role
-        if role_name == 'N1':
-            base_select += ' AND (t.assigned_role_id = ? OR t.assigned_role_id IS NULL)'
-            params.append(current_role_id)
-        else:
-            base_select += ' AND t.assigned_role_id = ?'
-            params.append(current_role_id)
+    # Get habilitations for qualification
+    habilitations_data = db.get_all_habilitations()
+    habilitations = [(h['id'], h['nom'], h['categorie']) for h in habilitations_data]
 
-    base_select += ' ORDER BY t.date_creation DESC'
-
-    c.execute(base_select, tuple(params))
-    tickets = c.fetchall()
-
-    # Habilitations list for qualification
-    c.execute('SELECT id, nom, categorie FROM habilitation ORDER BY categorie, nom')
-    habilitations = c.fetchall()
-
-    # Current role habilitations for resolve permission
+    # Get current role habilitations for resolve permission
     role_hab_ids = set()
-    if role_name in ROLE_ORDER + ['N2']:
-        c.execute('SELECT id FROM role WHERE nom = ?', (role_name,))
-        r = c.fetchone()
-        if r:
-            c.execute('SELECT habilitation_id FROM role_habilitation WHERE role_id = ?', (r[0],))
-            role_hab_ids = {row[0] for row in c.fetchall()}
+    if role_name in ROLE_ORDER + ['N2'] and current_role_id:
+        role_habilitations = db.get_role_habilitations(current_role_id)
+        role_hab_ids = {h['id'] for h in role_habilitations}
 
-    conn.close()
     return render_template('resoudre_tickets.html', tickets=tickets, habilitations=habilitations, role_name=role_name, role_hab_ids=role_hab_ids)
 
 # ---- Gestion des tickets (Admin only) ----
@@ -430,36 +342,35 @@ def gestion_tickets():
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = get_db_connection()
-    c = conn.cursor()
-    
     # Get all tickets with user and status information
-    c.execute('''
-        SELECT t.id, t.titre, u.nom_utilisateur as auteur, t.description, t.date_creation,
-               s.nom as statut, t.required_habilitation_id, t.assigned_role_id,
-               u.prenom, u.nom as nom_utilisateur_complet
-        FROM ticket t
-        JOIN utilisateur u ON u.id = t.idutilisateur
-        LEFT JOIN statut s ON t.statut_id = s.id
-        ORDER BY t.date_creation DESC
-    ''')
-    tickets = c.fetchall()
+    tickets_data = db.get_all_tickets()
+    tickets = []
+    for t in tickets_data:
+        tickets.append((
+            t['id'], 
+            t['titre'], 
+            t['utilisateur']['nom_utilisateur'], 
+            t['description'], 
+            t['date_creation'],
+            t['statut']['nom'], 
+            t.get('required_habilitation_id'), 
+            t.get('assigned_role_id'),
+            t['utilisateur'].get('prenom', ''), 
+            t['utilisateur'].get('nom', '')
+        ))
     
-    # Get all statuts for dropdown
-    c.execute('SELECT id, nom FROM statut ORDER BY nom')
-    statuts = c.fetchall()
+    # Get all data for dropdowns
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
     
-    # Get all users for dropdown
-    c.execute('SELECT id, nom_utilisateur, prenom, nom FROM utilisateur ORDER BY nom')
-    users = c.fetchall()
+    users_data = db.get_all_users()
+    users = [(u['id'], u['nom_utilisateur'], u.get('prenom', ''), u.get('nom', '')) for u in users_data]
     
-    # Get all categories and types for dropdown
-    c.execute('SELECT id, nom FROM categorie ORDER BY nom')
-    categories = c.fetchall()
-    c.execute('SELECT id, nom FROM type ORDER BY nom')
-    types = c.fetchall()
+    categories_data = db.get_all_categories()
+    categories = [(c['id'], c['nom']) for c in categories_data]
     
-    conn.close()
+    types_data = db.get_all_types()
+    types = [(t['id'], t['nom']) for t in types_data]
     
     return render_template('gestion_tickets.html', tickets=tickets, statuts=statuts, users=users, categories=categories, types=types)
 
@@ -468,18 +379,18 @@ def ajouter_ticket_admin():
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = get_db_connection()
-    c = conn.cursor()
-    
     # Get data for dropdowns
-    c.execute('SELECT id, nom FROM categorie ORDER BY nom')
-    categories = c.fetchall()
-    c.execute('SELECT id, nom FROM type ORDER BY nom')
-    types = c.fetchall()
-    c.execute('SELECT id, nom FROM statut ORDER BY nom')
-    statuts = c.fetchall()
-    c.execute('SELECT id, nom_utilisateur, prenom, nom FROM utilisateur ORDER BY nom')
-    users = c.fetchall()
+    categories_data = db.get_all_categories()
+    categories = [(c['id'], c['nom']) for c in categories_data]
+    
+    types_data = db.get_all_types()
+    types = [(t['id'], t['nom']) for t in types_data]
+    
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    
+    users_data = db.get_all_users()
+    users = [(u['id'], u['nom_utilisateur'], u.get('prenom', ''), u.get('nom', '')) for u in users_data]
     
     if request.method == 'POST':
         titre = request.form['titre']
@@ -489,19 +400,26 @@ def ajouter_ticket_admin():
         statut_id = request.form.get('statut')
         user_id = request.form.get('user_id')
         
-        # Insert ticket
-        c.execute('''
-            INSERT INTO ticket (titre, description, date_creation, idutilisateur, categorie_id, type_id, statut_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (titre, description, datetime.now(), user_id, categorie_id, type_id, statut_id))
+        # Create ticket data
+        ticket_data = {
+            'titre': titre,
+            'description': description,
+            'date_creation': datetime.now().isoformat(),
+            'idutilisateur': int(user_id) if user_id else None,
+            'categorie_id': int(categorie_id) if categorie_id else None,
+            'type_id': int(type_id) if type_id else None,
+            'statut_id': int(statut_id) if statut_id else 1
+        }
         
-        conn.commit()
-        conn.close()
+        # Create ticket
+        ticket = db.create_ticket(ticket_data)
+        if ticket:
+            flash('Ticket créé avec succès !', 'success')
+        else:
+            flash('Erreur lors de la création du ticket', 'error')
         
-        flash('Ticket créé avec succès !', 'success')
         return redirect(url_for('gestion_tickets'))
     
-    conn.close()
     return render_template('ajouter_ticket_admin.html', categories=categories, types=types, statuts=statuts, users=users)
 
 @app.route('/modifier-ticket/<int:ticket_id>', methods=['GET', 'POST'])
@@ -509,18 +427,18 @@ def modifier_ticket(ticket_id):
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = get_db_connection()
-    c = conn.cursor()
-    
     # Get data for dropdowns
-    c.execute('SELECT id, nom FROM categorie ORDER BY nom')
-    categories = c.fetchall()
-    c.execute('SELECT id, nom FROM type ORDER BY nom')
-    types = c.fetchall()
-    c.execute('SELECT id, nom FROM statut ORDER BY nom')
-    statuts = c.fetchall()
-    c.execute('SELECT id, nom_utilisateur, prenom, nom FROM utilisateur ORDER BY nom')
-    users = c.fetchall()
+    categories_data = db.get_all_categories()
+    categories = [(c['id'], c['nom']) for c in categories_data]
+    
+    types_data = db.get_all_types()
+    types = [(t['id'], t['nom']) for t in types_data]
+    
+    statuts_data = db.get_all_statuses()
+    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    
+    users_data = db.get_all_users()
+    users = [(u['id'], u['nom_utilisateur'], u.get('prenom', ''), u.get('nom', '')) for u in users_data]
     
     if request.method == 'POST':
         titre = request.form['titre']
@@ -530,35 +448,45 @@ def modifier_ticket(ticket_id):
         statut_id = request.form.get('statut')
         user_id = request.form.get('user_id')
         
+        # Update ticket data
+        ticket_data = {
+            'titre': titre,
+            'description': description,
+            'categorie_id': int(categorie_id) if categorie_id else None,
+            'type_id': int(type_id) if type_id else None,
+            'statut_id': int(statut_id) if statut_id else None,
+            'idutilisateur': int(user_id) if user_id else None
+        }
+        
         # Update ticket
-        c.execute('''
-            UPDATE ticket 
-            SET titre = ?, description = ?, categorie_id = ?, type_id = ?, statut_id = ?, idutilisateur = ?
-            WHERE id = ?
-        ''', (titre, description, categorie_id, type_id, statut_id, user_id, ticket_id))
+        ticket = db.update_ticket(ticket_id, ticket_data)
+        if ticket:
+            flash('Ticket modifié avec succès !', 'success')
+        else:
+            flash('Erreur lors de la modification du ticket', 'error')
         
-        conn.commit()
-        conn.close()
-        
-        flash('Ticket modifié avec succès !', 'success')
         return redirect(url_for('gestion_tickets'))
     
     # Get current ticket data
-    c.execute('''
-        SELECT t.id, t.titre, t.description, t.categorie_id, t.type_id, t.statut_id, t.idutilisateur,
-               u.nom_utilisateur, u.prenom, u.nom
-        FROM ticket t
-        JOIN utilisateur u ON u.id = t.idutilisateur
-        WHERE t.id = ?
-    ''', (ticket_id,))
-    ticket = c.fetchone()
-    
-    if not ticket:
-        conn.close()
+    ticket_data = db.get_ticket_by_id(ticket_id)
+    if not ticket_data:
         flash('Ticket non trouvé.', 'error')
         return redirect(url_for('gestion_tickets'))
     
-    conn.close()
+    # Format ticket data for template
+    ticket = (
+        ticket_data['id'],
+        ticket_data['titre'],
+        ticket_data['description'],
+        ticket_data.get('categorie_id'),
+        ticket_data.get('type_id'),
+        ticket_data.get('statut_id'),
+        ticket_data.get('idutilisateur'),
+        ticket_data['utilisateur']['nom_utilisateur'],
+        ticket_data['utilisateur'].get('prenom', ''),
+        ticket_data['utilisateur'].get('nom', '')
+    )
+    
     return render_template('modifier_ticket.html', ticket=ticket, categories=categories, types=types, statuts=statuts, users=users)
 
 @app.route('/supprimer-ticket/<int:ticket_id>', methods=['POST'])
@@ -566,52 +494,54 @@ def supprimer_ticket(ticket_id):
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = get_db_connection()
-    c = conn.cursor()
-    
     # Delete ticket
-    c.execute('DELETE FROM ticket WHERE id = ?', (ticket_id,))
-    conn.commit()
-    conn.close()
+    success = db.delete_ticket(ticket_id)
+    if success:
+        flash('Ticket supprimé avec succès !', 'success')
+    else:
+        flash('Erreur lors de la suppression du ticket', 'error')
     
-    flash('Ticket supprimé avec succès !', 'success')
     return redirect(url_for('gestion_tickets'))
 
 @app.route('/tickets/<int:ticket_id>/qualifier', methods=['POST'])
 def qualifier_ticket(ticket_id: int):
     if 'user_id' not in session or session.get('user_role') != 'N1':
         return redirect(url_for('login'))
+    
     required_hab_id = request.form.get('habilitation_id')
     if not required_hab_id:
         flash('Veuillez sélectionner une habilitation.', 'error')
         return redirect(url_for('resoudre_tickets'))
-    conn = get_db_connection()
-    c = conn.cursor()
-    # Ensure column exists
-    c.execute('PRAGMA table_info(ticket)')
-    cols = [row[1] for row in c.fetchall()]
-    if 'required_habilitation_id' not in cols:
-        flash("Champ 'required_habilitation_id' manquant dans ticket.", 'error')
-        conn.close()
+    
+    # Get status ID for 'Incident pris en charge'
+    statut_id = db.get_status_by_name('Incident pris en charge')
+    if not statut_id:
+        flash('Statut non trouvé.', 'error')
         return redirect(url_for('resoudre_tickets'))
-    # Set required habilitation and status to 'Incident pris en charge'
-    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident pris en charge',))
-    statut_row = c.fetchone()
-    statut_id = statut_row[0] if statut_row else None
-    c.execute('UPDATE ticket SET required_habilitation_id = ?, statut_id = ? WHERE id = ?', (required_hab_id, statut_id, ticket_id))
-    conn.commit()
-    conn.close()
-    flash('Qualification enregistrée.', 'success')
+    
+    # Update ticket with required habilitation and status
+    success = db.update_ticket(ticket_id, {
+        'required_habilitation_id': int(required_hab_id),
+        'statut_id': statut_id
+    })
+    
+    if success:
+        flash('Qualification enregistrée.', 'success')
+    else:
+        flash('Erreur lors de la qualification.', 'error')
+    
     return redirect(url_for('resoudre_tickets'))
 
 @app.route('/tickets/<int:ticket_id>/escalader', methods=['POST'])
 def escalader_ticket(ticket_id: int):
     if 'user_id' not in session or session.get('user_role') not in ROLE_ORDER + ['N2']:
         return redirect(url_for('login'))
+    
     role_name = current_role_name()
     if role_name == 'N4':
         flash('Impossible d\'escalader au-delà de N4.', 'error')
         return redirect(url_for('resoudre_tickets'))
+    
     # Determine next role
     next_role = None
     if role_name in ROLE_ORDER:
@@ -620,69 +550,88 @@ def escalader_ticket(ticket_id: int):
             next_role = ROLE_ORDER[idx + 1]
     elif role_name == 'N2':
         next_role = 'N3'  # admin can push towards N3 if acting as dispatcher
+    
     if not next_role:
         flash('Rôle suivant introuvable.', 'error')
         return redirect(url_for('resoudre_tickets'))
+    
     next_role_id = get_role_id_by_name(next_role)
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('PRAGMA table_info(ticket)')
-    cols = [row[1] for row in c.fetchall()]
-    if 'assigned_role_id' not in cols:
-        flash("Champ 'assigned_role_id' manquant dans ticket.", 'error')
-        conn.close()
+    if not next_role_id:
+        flash('Rôle suivant introuvable.', 'error')
         return redirect(url_for('resoudre_tickets'))
-    # Keep status as pris en charge
-    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident pris en charge',))
-    statut_row = c.fetchone()
-    statut_id = statut_row[0] if statut_row else None
-    c.execute('UPDATE ticket SET assigned_role_id = ?, statut_id = ? WHERE id = ?', (next_role_id, statut_id, ticket_id))
-    conn.commit()
-    conn.close()
-    flash(f'Ticket escaladé vers {next_role}.', 'success')
+    
+    # Get status ID for 'Incident pris en charge'
+    statut_id = db.get_status_by_name('Incident pris en charge')
+    if not statut_id:
+        flash('Statut non trouvé.', 'error')
+        return redirect(url_for('resoudre_tickets'))
+    
+    # Update ticket with new assigned role and status
+    success = db.update_ticket(ticket_id, {
+        'assigned_role_id': next_role_id,
+        'statut_id': statut_id
+    })
+    
+    if success:
+        flash(f'Ticket escaladé vers {next_role}.', 'success')
+    else:
+        flash('Erreur lors de l\'escalade.', 'error')
+    
     return redirect(url_for('resoudre_tickets'))
 
 @app.route('/tickets/<int:ticket_id>/resoudre', methods=['POST'])
 def resoudre_ticket(ticket_id: int):
     if 'user_id' not in session or session.get('user_role') not in ROLE_ORDER + ['N2']:
         return redirect(url_for('login'))
+    
     role_name = current_role_name()
-    # Allow N4 always; others only if they have the required habilitation
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('PRAGMA table_info(ticket)')
-    cols = [row[1] for row in c.fetchall()]
-    if 'required_habilitation_id' not in cols or 'resolution_due_at' not in cols or 'resolution_attempts' not in cols:
-        flash("Champs de support de résolution manquants dans ticket.", 'error')
-        conn.close()
+    
+    # Get ticket data
+    ticket_data = db.get_ticket_by_id(ticket_id)
+    if not ticket_data:
+        flash('Ticket non trouvé.', 'error')
         return redirect(url_for('resoudre_tickets'))
-    c.execute('SELECT required_habilitation_id, resolution_attempts FROM ticket WHERE id = ?', (ticket_id,))
-    row = c.fetchone()
-    required_hab_id = row[0] if row else None
-    attempts = row[1] or 0
+    
+    required_hab_id = ticket_data.get('required_habilitation_id')
+    attempts = ticket_data.get('resolution_attempts', 0)
+    
+    # Check if user can resolve this ticket
     allowed = False
     if role_name == 'N4':
         allowed = True
     elif required_hab_id is not None:
-        # Check role has habilitation
+        # Check if role has the required habilitation
         role_id = get_role_id_by_name(role_name)
-        c.execute('SELECT 1 FROM role_habilitation WHERE role_id = ? AND habilitation_id = ?', (role_id, required_hab_id))
-        if c.fetchone():
-            allowed = True
+        if role_id:
+            allowed = db.check_role_has_habilitation(role_id, required_hab_id)
+    
     if not allowed:
-        conn.close()
         flash("Vous n'avez pas l'habilitation requise pour résoudre ce ticket.", 'error')
         return redirect(url_for('resoudre_tickets'))
-    # Set status to 'Incident en cours de résolution' and due time
-    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident en cours de résolution',))
-    statut_row = c.fetchone()
-    statut_id = statut_row[0] if statut_row else None
+    
+    # Get status ID for 'Incident en cours de résolution'
+    statut_id = db.get_status_by_name('Incident en cours de résolution')
+    if not statut_id:
+        flash('Statut non trouvé.', 'error')
+        return redirect(url_for('resoudre_tickets'))
+    
+    # Calculate resolution due time
     minutes = RESOLUTION_MINUTES_BY_ROLE.get(role_name, 2)
     due_at = datetime.now() + timedelta(minutes=minutes)
-    c.execute('UPDATE ticket SET statut_id = ?, date_mise_a_jour = ?, resolution_due_at = ?, resolution_attempts = ? WHERE id = ?', (statut_id, datetime.now(), due_at, attempts + 1, ticket_id))
-    conn.commit()
-    conn.close()
-    flash(f'Ticket en résolution ({minutes} min).', 'success')
+    
+    # Update ticket with resolution status and due time
+    success = db.update_ticket(ticket_id, {
+        'statut_id': statut_id,
+        'date_mise_a_jour': datetime.now().isoformat(),
+        'resolution_due_at': due_at.isoformat(),
+        'resolution_attempts': attempts + 1
+    })
+    
+    if success:
+        flash(f'Ticket en résolution ({minutes} min).', 'success')
+    else:
+        flash('Erreur lors de la mise en résolution.', 'error')
+    
     return redirect(url_for('resoudre_tickets'))
 
 # Endpoints for requester validation
@@ -690,13 +639,10 @@ def resoudre_ticket(ticket_id: int):
 def valider_ticket(ticket_id: int):
     if 'user_id' not in session:
         return redirect(url_for('login'))
+    
     # Only the creator can validate/refuse
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('SELECT idutilisateur FROM ticket WHERE id = ?', (ticket_id,))
-    row = c.fetchone()
-    if not row or row[0] != session['user_id']:
-        conn.close()
+    ticket_data = db.get_ticket_by_id(ticket_id)
+    if not ticket_data or ticket_data.get('idutilisateur') != session['user_id']:
         flash("Vous ne pouvez valider que vos propres tickets.", 'error')
         # Redirect to appropriate dashboard based on user role
         user_role = session.get('user_role')
@@ -710,14 +656,24 @@ def valider_ticket(ticket_id: int):
             return redirect(url_for('dashboard_n4'))
         else:
             return redirect(url_for('dashboard_initial'))
-    # Set status to 'Incident clos'
-    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident clos',))
-    srow = c.fetchone()
-    if srow:
-        c.execute('UPDATE ticket SET statut_id = ?, date_cloture = ? WHERE id = ?', (srow[0], datetime.now(), ticket_id))
-        conn.commit()
-    conn.close()
-    flash('Ticket clôturé avec succès.', 'success')
+    
+    # Get status ID for 'Incident clos'
+    statut_id = db.get_status_by_name('Incident clos')
+    if not statut_id:
+        flash('Statut non trouvé.', 'error')
+        return redirect(url_for('dashboard_initial'))
+    
+    # Update ticket with closed status
+    success = db.update_ticket(ticket_id, {
+        'statut_id': statut_id,
+        'date_cloture': datetime.now().isoformat()
+    })
+    
+    if success:
+        flash('Ticket clôturé avec succès.', 'success')
+    else:
+        flash('Erreur lors de la clôture.', 'error')
+    
     # Redirect to appropriate dashboard based on user role
     user_role = session.get('user_role')
     if user_role == 'N2':
@@ -735,13 +691,10 @@ def valider_ticket(ticket_id: int):
 def refuser_ticket(ticket_id: int):
     if 'user_id' not in session:
         return redirect(url_for('login'))
+    
     # Only the creator can refuse
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('SELECT idutilisateur, titre FROM ticket WHERE id = ?', (ticket_id,))
-    row = c.fetchone()
-    if not row or row[0] != session['user_id']:
-        conn.close()
+    ticket_data = db.get_ticket_by_id(ticket_id)
+    if not ticket_data or ticket_data.get('idutilisateur') != session['user_id']:
         flash("Vous ne pouvez refuser que vos propres tickets.", 'error')
         # Redirect to appropriate dashboard based on user role
         user_role = session.get('user_role')
@@ -755,18 +708,33 @@ def refuser_ticket(ticket_id: int):
             return redirect(url_for('dashboard_n4'))
         else:
             return redirect(url_for('dashboard_initial'))
-    titre = row[1] or ''
-    # Reset status to first step and append note to title
-    c.execute('SELECT id FROM statut WHERE nom = ?', ('Incident déclaré',))
-    srow = c.fetchone()
+    
+    titre = ticket_data.get('titre', '')
     new_title = (titre + ' [Retour - solution non concluante]').strip()
-    if srow:
-        # Reset ticket to initial state: clear habilitation and reassign to N1
-        n1_role_id = get_role_id_by_name('N1')
-        c.execute('UPDATE ticket SET statut_id = ?, titre = ?, resolution_due_at = NULL, required_habilitation_id = NULL, assigned_role_id = ? WHERE id = ?', (srow[0], new_title, n1_role_id, ticket_id))
-        conn.commit()
-    conn.close()
-    flash('Ticket renvoyé pour nouveau traitement.', 'success')
+    
+    # Get status ID for 'Incident déclaré'
+    statut_id = db.get_status_by_name('Incident déclaré')
+    if not statut_id:
+        flash('Statut non trouvé.', 'error')
+        return redirect(url_for('dashboard_initial'))
+    
+    # Get N1 role ID for reassignment
+    n1_role_id = get_role_id_by_name('N1')
+    
+    # Reset ticket to initial state
+    success = db.update_ticket(ticket_id, {
+        'statut_id': statut_id,
+        'titre': new_title,
+        'resolution_due_at': None,
+        'required_habilitation_id': None,
+        'assigned_role_id': n1_role_id
+    })
+    
+    if success:
+        flash('Ticket renvoyé pour nouveau traitement.', 'success')
+    else:
+        flash('Erreur lors du renvoi.', 'error')
+    
     # Redirect to appropriate dashboard based on user role
     user_role = session.get('user_role')
     if user_role == 'N2':
@@ -786,16 +754,18 @@ def gestion_utilisateurs():
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT u.id, u.nom_utilisateur, u.email, u.prenom, u.nom, r.nom as role_nom
-        FROM utilisateur u
-        JOIN role r ON u.role_id = r.id
-        ORDER BY u.nom
-    ''')
-    users = c.fetchall()
-    conn.close()
+    # Get all users with role information
+    users_data = db.get_all_users()
+    users = []
+    for u in users_data:
+        users.append((
+            u['id'],
+            u['nom_utilisateur'],
+            u['email'],
+            u.get('prenom', ''),
+            u.get('nom', ''),
+            u['role']['nom'] if u.get('role') else 'N/A'
+        ))
     
     return render_template('gestion_utilisateurs.html', users=users)
 
@@ -804,11 +774,9 @@ def ajouter_utilisateur():
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('SELECT id, nom, description FROM role ORDER BY nom')
-    roles = c.fetchall()
-    conn.close()
+    # Get all roles
+    roles_data = db.get_all_roles()
+    roles = [(r['id'], r['nom'], r.get('description', '')) for r in roles_data]
     
     if request.method == 'POST':
         nom_utilisateur = request.form['nom_utilisateur']
@@ -818,34 +786,33 @@ def ajouter_utilisateur():
         nom = request.form['nom']
         role_id = request.form['role_id']
         
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        
         # Check if username already exists
-        c.execute('SELECT id FROM utilisateur WHERE nom_utilisateur = ?', (nom_utilisateur,))
-        if c.fetchone():
-            flash('Ce nom d\'utilisateur existe déjà.', 'error')
-            conn.close()
-            return render_template('ajouter_utilisateur.html', roles=roles)
+        users = db.get_all_users()
+        for user in users:
+            if user['nom_utilisateur'] == nom_utilisateur:
+                flash('Ce nom d\'utilisateur existe déjà.', 'error')
+                return render_template('ajouter_utilisateur.html', roles=roles)
+            if user['email'] == email:
+                flash('Cette adresse e-mail existe déjà.', 'error')
+                return render_template('ajouter_utilisateur.html', roles=roles)
         
-        # Check if email already exists
-        c.execute('SELECT id FROM utilisateur WHERE email = ?', (email,))
-        if c.fetchone():
-            flash('Cette adresse e-mail existe déjà.', 'error')
-            conn.close()
-            return render_template('ajouter_utilisateur.html', roles=roles)
+        # Create user data
+        user_data = {
+            'nom_utilisateur': nom_utilisateur,
+            'email': email,
+            'mot_de_passe': mot_de_passe,
+            'prenom': prenom,
+            'nom': nom,
+            'role_id': int(role_id)
+        }
         
-        # Insert new user
-        c.execute('''
-            INSERT INTO utilisateur (nom_utilisateur, email, mot_de_passe, prenom, nom, role_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (nom_utilisateur, email, mot_de_passe, prenom, nom, role_id))
-        
-        conn.commit()
-        conn.close()
-        
-        flash('Utilisateur ajouté avec succès !', 'success')
-        return redirect(url_for('gestion_utilisateurs'))
+        # Create user
+        user = db.create_user(user_data)
+        if user:
+            flash('Utilisateur ajouté avec succès !', 'success')
+            return redirect(url_for('gestion_utilisateurs'))
+        else:
+            flash('Erreur lors de la création de l\'utilisateur', 'error')
     
     return render_template('ajouter_utilisateur.html', roles=roles)
 
@@ -854,12 +821,9 @@ def modifier_utilisateur(user_id):
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    
     # Get roles for dropdown
-    c.execute('SELECT id, nom, description FROM role ORDER BY nom')
-    roles = c.fetchall()
+    roles_data = db.get_all_roles()
+    roles = [(r['id'], r['nom'], r.get('description', '')) for r in roles_data]
     
     if request.method == 'POST':
         nom_utilisateur = request.form['nom_utilisateur']
@@ -870,52 +834,54 @@ def modifier_utilisateur(user_id):
         mot_de_passe = request.form.get('mot_de_passe', '')
         
         # Check if username already exists (excluding current user)
-        c.execute('SELECT id FROM utilisateur WHERE nom_utilisateur = ? AND id != ?', (nom_utilisateur, user_id))
-        if c.fetchone():
-            flash('Ce nom d\'utilisateur existe déjà.', 'error')
-            conn.close()
-            return redirect(url_for('modifier_utilisateur', user_id=user_id))
+        users = db.get_all_users()
+        for user in users:
+            if user['id'] != user_id:
+                if user['nom_utilisateur'] == nom_utilisateur:
+                    flash('Ce nom d\'utilisateur existe déjà.', 'error')
+                    return redirect(url_for('modifier_utilisateur', user_id=user_id))
+                if user['email'] == email:
+                    flash('Cette adresse e-mail existe déjà.', 'error')
+                    return redirect(url_for('modifier_utilisateur', user_id=user_id))
         
-        # Check if email already exists (excluding current user)
-        c.execute('SELECT id FROM utilisateur WHERE email = ? AND id != ?', (email, user_id))
-        if c.fetchone():
-            flash('Cette adresse e-mail existe déjà.', 'error')
-            conn.close()
-            return redirect(url_for('modifier_utilisateur', user_id=user_id))
+        # Prepare update data
+        user_data = {
+            'nom_utilisateur': nom_utilisateur,
+            'email': email,
+            'prenom': prenom,
+            'nom': nom,
+            'role_id': int(role_id)
+        }
+        
+        # Include password if provided
+        if mot_de_passe:
+            user_data['mot_de_passe'] = mot_de_passe
         
         # Update user
-        if mot_de_passe:
-            c.execute('''
-                UPDATE utilisateur 
-                SET nom_utilisateur = ?, email = ?, mot_de_passe = ?, prenom = ?, nom = ?, role_id = ?
-                WHERE id = ?
-            ''', (nom_utilisateur, email, mot_de_passe, prenom, nom, role_id, user_id))
+        user = db.update_user(user_id, user_data)
+        if user:
+            flash('Utilisateur modifié avec succès !', 'success')
         else:
-            c.execute('''
-                UPDATE utilisateur 
-                SET nom_utilisateur = ?, email = ?, prenom = ?, nom = ?, role_id = ?
-                WHERE id = ?
-            ''', (nom_utilisateur, email, prenom, nom, role_id, user_id))
+            flash('Erreur lors de la modification de l\'utilisateur', 'error')
         
-        conn.commit()
-        conn.close()
-        
-        flash('Utilisateur modifié avec succès !', 'success')
         return redirect(url_for('gestion_utilisateurs'))
     
     # Get user data for editing
-    c.execute('''
-        SELECT u.id, u.nom_utilisateur, u.email, u.prenom, u.nom, u.role_id, r.nom as role_nom
-        FROM utilisateur u
-        JOIN role r ON u.role_id = r.id
-        WHERE u.id = ?
-    ''', (user_id,))
-    user = c.fetchone()
-    conn.close()
-    
-    if not user:
+    user_data = db.get_user_by_id(user_id)
+    if not user_data:
         flash('Utilisateur non trouvé.', 'error')
         return redirect(url_for('gestion_utilisateurs'))
+    
+    # Format user data for template
+    user = (
+        user_data['id'],
+        user_data['nom_utilisateur'],
+        user_data['email'],
+        user_data.get('prenom', ''),
+        user_data.get('nom', ''),
+        user_data.get('role_id'),
+        user_data['role']['nom'] if user_data.get('role') else 'N/A'
+    )
     
     return render_template('modifier_utilisateur.html', user=user, roles=roles)
 
@@ -929,24 +895,19 @@ def supprimer_utilisateur(user_id):
         flash('Vous ne pouvez pas supprimer votre propre compte.', 'error')
         return redirect(url_for('gestion_utilisateurs'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    
     # Check if user has any tickets
-    c.execute('SELECT COUNT(*) FROM ticket WHERE idutilisateur = ?', (user_id,))
-    ticket_count = c.fetchone()[0]
-    
+    ticket_count = db.get_user_count(user_id)
     if ticket_count > 0:
         flash('Impossible de supprimer cet utilisateur car il a des tickets associés.', 'error')
-        conn.close()
         return redirect(url_for('gestion_utilisateurs'))
     
     # Delete user
-    c.execute('DELETE FROM utilisateur WHERE id = ?', (user_id,))
-    conn.commit()
-    conn.close()
+    success = db.delete_user(user_id)
+    if success:
+        flash('Utilisateur supprimé avec succès !', 'success')
+    else:
+        flash('Erreur lors de la suppression de l\'utilisateur', 'error')
     
-    flash('Utilisateur supprimé avec succès !', 'success')
     return redirect(url_for('gestion_utilisateurs'))
 
 # Habilitation Management Routes
@@ -955,11 +916,9 @@ def gestion_habilitations():
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('SELECT id, nom, description FROM role ORDER BY nom')
-    roles = c.fetchall()
-    conn.close()
+    # Get all roles
+    roles_data = db.get_all_roles()
+    roles = [(r['id'], r['nom'], r.get('description', '')) for r in roles_data]
     
     return render_template('gestion_habilitations.html', roles=roles)
 
@@ -968,36 +927,24 @@ def gestion_habilitations_role(role_id):
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    
     # Get role info
-    c.execute('SELECT id, nom, description FROM role WHERE id = ?', (role_id,))
-    role = c.fetchone()
-    
-    if not role:
+    role_data = db.get_user_by_id(role_id)  # This will get role info
+    if not role_data:
         flash('Rôle non trouvé.', 'error')
         return redirect(url_for('gestion_habilitations'))
     
     # Get current habilitations for this role
-    c.execute('''
-        SELECT h.id, h.nom, h.description, h.categorie
-        FROM habilitation h
-        JOIN role_habilitation rh ON h.id = rh.habilitation_id
-        WHERE rh.role_id = ?
-        ORDER BY h.categorie, h.nom
-    ''', (role_id,))
-    current_habilitations = c.fetchall()
+    current_habilitations_data = db.get_role_habilitations(role_id)
+    current_habilitations = [(h['id'], h['nom'], h.get('description', ''), h.get('categorie', '')) 
+                            for h in current_habilitations_data]
     
     # Get all available habilitations
-    c.execute('''
-        SELECT h.id, h.nom, h.description, h.categorie
-        FROM habilitation h
-        ORDER BY h.categorie, h.nom
-    ''')
-    all_habilitations = c.fetchall()
+    all_habilitations_data = db.get_all_habilitations()
+    all_habilitations = [(h['id'], h['nom'], h.get('description', ''), h.get('categorie', '')) 
+                        for h in all_habilitations_data]
     
-    conn.close()
+    # Format role data for template
+    role = (role_data['id'], role_data['nom'], role_data.get('description', ''))
     
     return render_template('gestion_habilitations_role.html', 
                          role=role, 
@@ -1015,20 +962,20 @@ def ajouter_habilitation_role(role_id):
         flash('Veuillez sélectionner une habilitation.', 'error')
         return redirect(url_for('gestion_habilitations_role', role_id=role_id))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    
-    try:
-        c.execute('''
-            INSERT INTO role_habilitation (role_id, habilitation_id)
-            VALUES (?, ?)
-        ''', (role_id, habilitation_id))
-        conn.commit()
-        flash('Habilitation ajoutée au rôle avec succès !', 'success')
-    except sqlite3.IntegrityError:
+    # Check if habilitation is already assigned to this role
+    if db.check_role_has_habilitation(role_id, int(habilitation_id)):
         flash('Cette habilitation est déjà assignée à ce rôle.', 'error')
-    finally:
-        conn.close()
+        return redirect(url_for('gestion_habilitations_role', role_id=role_id))
+    
+    # Add habilitation to role
+    try:
+        result = db._make_request("POST", "role_habilitation", data={
+            'role_id': role_id,
+            'habilitation_id': int(habilitation_id)
+        })
+        flash('Habilitation ajoutée au rôle avec succès !', 'success')
+    except Exception as e:
+        flash('Erreur lors de l\'ajout de l\'habilitation.', 'error')
     
     return redirect(url_for('gestion_habilitations_role', role_id=role_id))
 
@@ -1037,18 +984,12 @@ def supprimer_habilitation_role(role_id, habilitation_id):
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
+    try:
+        db._make_request("DELETE", f"role_habilitation?role_id=eq.{role_id}&habilitation_id=eq.{habilitation_id}")
+        flash('Habilitation supprimée du rôle avec succès !', 'success')
+    except Exception as e:
+        flash('Erreur lors de la suppression de l\'habilitation.', 'error')
     
-    c.execute('''
-        DELETE FROM role_habilitation 
-        WHERE role_id = ? AND habilitation_id = ?
-    ''', (role_id, habilitation_id))
-    
-    conn.commit()
-    conn.close()
-    
-    flash('Habilitation supprimée du rôle avec succès !', 'success')
     return redirect(url_for('gestion_habilitations_role', role_id=role_id))
 
 if __name__ == '__main__':
