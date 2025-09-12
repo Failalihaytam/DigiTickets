@@ -20,6 +20,11 @@
 	.dt-msg{ max-width:80%; margin:6px 0; padding:8px 12px; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; }
 	.dt-user{ margin-left:auto; background:#22c55e; color:#0b1020; border-bottom-right-radius:4px; }
 	.dt-bot{ margin-right:auto; background:#e9ecef; color:#212529; border-bottom-left-radius:4px; }
+	.dt-bot strong{ font-weight:600; color:#000; }
+	.dt-bot em{ font-style:italic; color:#495057; }
+	.dt-bot code{ background:#f8f9fa; padding:2px 4px; border-radius:3px; font-family:monospace; font-size:0.9em; }
+	.dt-bot ul, .dt-bot ol{ margin:8px 0; padding-left:20px; }
+	.dt-bot li{ margin:4px 0; }
 	#dt-chatbot-input{ display:flex; gap:6px; padding:8px; border-top:1px solid #e9ecef; background:#fff; }
 	#dt-chatbot-text{ flex:1; padding:10px 12px; border:1px solid #ced4da; border-radius:10px; font-size:14px; }
 	#dt-chatbot-send{ padding:10px 14px; border:none; border-radius:10px; background:#7A9B41; color:#fff; cursor:pointer; }
@@ -55,7 +60,19 @@
 	function addMsg(text, who){
 		const d = document.createElement('div');
 		d.className = 'dt-msg ' + (who === 'user' ? 'dt-user' : 'dt-bot');
-		d.textContent = text;
+		
+		if (who === 'bot') {
+			// Convert markdown to HTML for bot messages
+			let htmlText = text
+				.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')  // Bold **text**
+				.replace(/\*(.*?)\*/g, '<em>$1</em>')              // Italic *text*
+				.replace(/`(.*?)`/g, '<code>$1</code>')            // Code `text`
+				.replace(/\n/g, '<br>');                           // Line breaks
+			d.innerHTML = htmlText;
+		} else {
+			d.textContent = text;
+		}
+		
 		messages.appendChild(d);
 		messages.scrollTop = messages.scrollHeight;
 	}
