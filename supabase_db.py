@@ -84,7 +84,7 @@ class SupabaseDB:
     def get_user_by_id(self, user_id):
         """Get user by ID"""
         try:
-            result = self._make_request("GET", f"utilisateur?id=eq.{user_id}&select=id,nom,role_id,role(nom)")
+            result = self._make_request("GET", f"utilisateur?id=eq.{user_id}&select=id,nom_utilisateur,email,prenom,nom,role_id,role(nom)")
             return result[0] if result else None
         except Exception as e:
             print(f"Error getting user by ID: {e}")
