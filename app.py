@@ -65,6 +65,7 @@ def start_resolution_watcher():
 ensure_ticket_columns()
 start_resolution_watcher()
 
+
 @app.route('/')
 def home():
     return redirect(url_for('login'))
@@ -142,6 +143,12 @@ def ajouter_ticket():
             file_record = db.create_file({'fichier': file_data.hex()})  # Convert to hex for storage
             fichier_id = file_record['id'] if file_record else None
         
+        # Get status ID for 'Incident déclaré'
+        statut_id = db.get_status_by_name('Incident déclaré')
+        if not statut_id:
+            flash('Statut "Incident déclaré" non trouvé dans la base de données.', 'error')
+            return redirect(url_for('ajouter_ticket'))
+        
         # Create ticket data
         ticket_data = {
             'titre': titre,
@@ -150,11 +157,12 @@ def ajouter_ticket():
             'idutilisateur': user_id,
             'categorie_id': int(categorie_id) if categorie_id else None,
             'type_id': int(type_id) if type_id else None,
-            'statut_id': 1  # Incident déclaré
+            'statut_id': statut_id
         }
         
         # Create ticket
         ticket = db.create_ticket(ticket_data)
+        
         if ticket:
             # Assign to N1 by default
             n1_id = get_role_id_by_name('N1')
@@ -400,6 +408,15 @@ def ajouter_ticket_admin():
         statut_id = request.form.get('statut')
         user_id = request.form.get('user_id')
         
+        # Get status ID - use provided statut_id or default to 'Incident déclaré'
+        if statut_id:
+            final_statut_id = int(statut_id)
+        else:
+            final_statut_id = db.get_status_by_name('Incident déclaré')
+            if not final_statut_id:
+                flash('Statut "Incident déclaré" non trouvé dans la base de données.', 'error')
+                return redirect(url_for('ajouter_ticket_admin'))
+        
         # Create ticket data
         ticket_data = {
             'titre': titre,
@@ -408,7 +425,7 @@ def ajouter_ticket_admin():
             'idutilisateur': int(user_id) if user_id else None,
             'categorie_id': int(categorie_id) if categorie_id else None,
             'type_id': int(type_id) if type_id else None,
-            'statut_id': int(statut_id) if statut_id else 1
+            'statut_id': final_statut_id
         }
         
         # Create ticket
