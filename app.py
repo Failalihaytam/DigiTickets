@@ -321,7 +321,7 @@ def resoudre_tickets():
     # Format tickets for template
     tickets = []
     for t in tickets_data:
-        tickets.append((
+        ticket_tuple = (
             t['id'], 
             t['titre'], 
             t['utilisateur']['nom_utilisateur'], 
@@ -330,7 +330,8 @@ def resoudre_tickets():
             t['statut']['nom'], 
             t.get('required_habilitation_id'), 
             t.get('assigned_role_id')
-        ))
+        )
+        tickets.append(ticket_tuple)
 
     # Get habilitations for qualification
     habilitations_data = db.get_all_habilitations()
@@ -341,7 +342,6 @@ def resoudre_tickets():
     if role_name in ROLE_ORDER + ['N2'] and current_role_id:
         role_habilitations = db.get_role_habilitations(current_role_id)
         role_hab_ids = {h['id'] for h in role_habilitations}
-
     return render_template('resoudre_tickets.html', tickets=tickets, habilitations=habilitations, role_name=role_name, role_hab_ids=role_hab_ids)
 
 # ---- Gestion des tickets (Admin only) ----

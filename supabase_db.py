@@ -176,7 +176,7 @@ class SupabaseDB:
     def get_tickets_by_role(self, role_id):
         """Get tickets assigned to a specific role"""
         try:
-            result = self._make_request("GET", f"ticket?assigned_role_id=eq.{role_id}&select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur)&order=date_creation.desc")
+            result = self._make_request("GET", f"ticket?assigned_role_id=eq.{role_id}&select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur),required_habilitation_id,assigned_role_id&order=date_creation.desc")
             return result
         except Exception as e:
             print(f"Error getting tickets by role: {e}")
@@ -317,8 +317,13 @@ class SupabaseDB:
     def get_tickets_due_for_resolution(self):
         """Get tickets that are due for resolution"""
         try:
+            # Get the status ID for 'Incident en cours de résolution'
+            in_progress_id = self.get_status_by_name('Incident en cours de résolution')
+            if not in_progress_id:
+                return []
+            
             now = datetime.now().isoformat()
-            result = self._make_request("GET", f"ticket?statut_id=eq.3&resolution_due_at=not.is.null&resolution_due_at=lte.{now}&select=id")
+            result = self._make_request("GET", f"ticket?statut_id=eq.{in_progress_id}&resolution_due_at=not.is.null&resolution_due_at=lte.{now}&select=id")
             return result
         except Exception as e:
             print(f"Error getting tickets due for resolution: {e}")
