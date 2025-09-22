@@ -105,15 +105,17 @@ def dashboard_initial():
         return redirect(url_for('login'))
     user_id = session['user_id']
     nom = session.get('user_nom', '')
+    user_role = session.get('user_role', 'initial')
     
-    # Get user's tickets
-    tickets_data = db.get_user_tickets(user_id)
+    # Get all dashboard data in optimized queries
+    dashboard_data = db.get_dashboard_data(user_id, user_role)
+    
+    # Format tickets for template
     tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
-               for t in tickets_data]
+               for t in dashboard_data['tickets']]
     
-    # Get all statuses
-    statuts_data = db.get_all_statuses()
-    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    # Format statuses for template
+    statuts = [(s['id'], s['nom']) for s in dashboard_data['statuses']]
     
     return render_template('dashboard_initial.html', nom=nom, tickets=tickets, statuts=statuts)
 
@@ -168,6 +170,9 @@ def ajouter_ticket():
             n1_id = get_role_id_by_name('N1')
             if n1_id:
                 db.update_ticket(ticket['id'], {'assigned_role_id': n1_id})
+            
+            # Invalidate cache for dashboard data
+            db.invalidate_cache('dashboard')
             
             flash('Ticket créé avec succès !', 'success')
         else:
@@ -241,10 +246,12 @@ def dashboard_admin():
     nom = session.get('user_nom', '')
     user_id = session['user_id']
     
-    # Show only admin's own tickets (Mes tickets)
-    tickets_data = db.get_user_tickets(user_id)
+    # Get all dashboard data in optimized queries
+    dashboard_data = db.get_dashboard_data(user_id, 'N2')
+    
+    # Format tickets for template
     tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
-               for t in tickets_data]
+               for t in dashboard_data['tickets']]
     
     return render_template('dashboard_admin.html', nom=nom, tickets=tickets)
 
@@ -256,12 +263,15 @@ def dashboard_n1():
     user_id = session['user_id']
     nom = session.get('user_nom', '')
     
-    tickets_data = db.get_user_tickets(user_id)
-    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
-               for t in tickets_data]
+    # Get all dashboard data in optimized queries
+    dashboard_data = db.get_dashboard_data(user_id, 'N1')
     
-    statuts_data = db.get_all_statuses()
-    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    # Format tickets for template
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in dashboard_data['tickets']]
+    
+    # Format statuses for template
+    statuts = [(s['id'], s['nom']) for s in dashboard_data['statuses']]
     
     return render_template('dashboard_n1.html', nom=nom, tickets=tickets, statuts=statuts)
 
@@ -272,12 +282,15 @@ def dashboard_n3():
     user_id = session['user_id']
     nom = session.get('user_nom', '')
     
-    tickets_data = db.get_user_tickets(user_id)
-    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
-               for t in tickets_data]
+    # Get all dashboard data in optimized queries
+    dashboard_data = db.get_dashboard_data(user_id, 'N3')
     
-    statuts_data = db.get_all_statuses()
-    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    # Format tickets for template
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in dashboard_data['tickets']]
+    
+    # Format statuses for template
+    statuts = [(s['id'], s['nom']) for s in dashboard_data['statuses']]
     
     return render_template('dashboard_n3.html', nom=nom, tickets=tickets, statuts=statuts)
 
@@ -288,12 +301,15 @@ def dashboard_n4():
     user_id = session['user_id']
     nom = session.get('user_nom', '')
     
-    tickets_data = db.get_user_tickets(user_id)
-    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
-               for t in tickets_data]
+    # Get all dashboard data in optimized queries
+    dashboard_data = db.get_dashboard_data(user_id, 'N4')
     
-    statuts_data = db.get_all_statuses()
-    statuts = [(s['id'], s['nom']) for s in statuts_data]
+    # Format tickets for template
+    tickets = [(t['id'], t['titre'], t['description'], t['date_creation'], t['statut']['nom']) 
+               for t in dashboard_data['tickets']]
+    
+    # Format statuses for template
+    statuts = [(s['id'], s['nom']) for s in dashboard_data['statuses']]
     
     return render_template('dashboard_n4.html', nom=nom, tickets=tickets, statuts=statuts)
 
@@ -307,16 +323,11 @@ def resoudre_tickets():
     role_name = current_role_name()
     current_role_id = get_role_id_by_name(role_name)
 
-    # Get tickets based on role
-    if role_name == 'N1':
-        # N1 sees tickets assigned to N1 or unassigned
-        tickets_data = db.get_tickets_by_role(current_role_id) if current_role_id else []
-        # Also get unassigned tickets
-        unassigned_tickets = db._make_request("GET", "ticket?assigned_role_id=is.null&select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur),required_habilitation_id,assigned_role_id&order=date_creation.desc")
-        tickets_data.extend(unassigned_tickets)
-    else:
-        # Others see only tickets assigned to their role
-        tickets_data = db.get_tickets_by_role(current_role_id) if current_role_id else []
+    # Get all resolution dashboard data in optimized queries
+    dashboard_data = db.get_resolution_dashboard_data(current_role_id, role_name)
+    tickets_data = dashboard_data['tickets']
+    habilitations_data = dashboard_data['habilitations']
+    role_hab_ids = dashboard_data['role_hab_ids']
 
     # Format tickets for template
     tickets = []
@@ -333,15 +344,9 @@ def resoudre_tickets():
         )
         tickets.append(ticket_tuple)
 
-    # Get habilitations for qualification
-    habilitations_data = db.get_all_habilitations()
+    # Format habilitations for template
     habilitations = [(h['id'], h['nom'], h['categorie']) for h in habilitations_data]
 
-    # Get current role habilitations for resolve permission
-    role_hab_ids = set()
-    if role_name in ROLE_ORDER + ['N2'] and current_role_id:
-        role_habilitations = db.get_role_habilitations(current_role_id)
-        role_hab_ids = {h['id'] for h in role_habilitations}
     return render_template('resoudre_tickets.html', tickets=tickets, habilitations=habilitations, role_name=role_name, role_hab_ids=role_hab_ids)
 
 # ---- Gestion des tickets (Admin only) ----
@@ -350,8 +355,15 @@ def gestion_tickets():
     if 'user_id' not in session or session.get('user_role') != 'N2':
         return redirect(url_for('login'))
     
-    # Get all tickets with user and status information
-    tickets_data = db.get_all_tickets()
+    # Get all admin dashboard data in optimized queries
+    dashboard_data = db.get_admin_dashboard_data()
+    tickets_data = dashboard_data['tickets']
+    statuts_data = dashboard_data['statuses']
+    users_data = dashboard_data['users']
+    categories_data = dashboard_data['categories']
+    types_data = dashboard_data['types']
+    
+    # Format tickets for template
     tickets = []
     for t in tickets_data:
         tickets.append((
@@ -367,17 +379,10 @@ def gestion_tickets():
             t['utilisateur'].get('nom', '')
         ))
     
-    # Get all data for dropdowns
-    statuts_data = db.get_all_statuses()
+    # Format data for dropdowns
     statuts = [(s['id'], s['nom']) for s in statuts_data]
-    
-    users_data = db.get_all_users()
     users = [(u['id'], u['nom_utilisateur'], u.get('prenom', ''), u.get('nom', '')) for u in users_data]
-    
-    categories_data = db.get_all_categories()
     categories = [(c['id'], c['nom']) for c in categories_data]
-    
-    types_data = db.get_all_types()
     types = [(t['id'], t['nom']) for t in types_data]
     
     return render_template('gestion_tickets.html', tickets=tickets, statuts=statuts, users=users, categories=categories, types=types)
@@ -478,6 +483,8 @@ def modifier_ticket(ticket_id):
         # Update ticket
         ticket = db.update_ticket(ticket_id, ticket_data)
         if ticket:
+            # Invalidate cache for dashboard data
+            db.invalidate_cache('dashboard')
             flash('Ticket modifié avec succès !', 'success')
         else:
             flash('Erreur lors de la modification du ticket', 'error')
@@ -514,6 +521,8 @@ def supprimer_ticket(ticket_id):
     # Delete ticket
     success = db.delete_ticket(ticket_id)
     if success:
+        # Invalidate cache for dashboard data
+        db.invalidate_cache('dashboard')
         flash('Ticket supprimé avec succès !', 'success')
     else:
         flash('Erreur lors de la suppression du ticket', 'error')
@@ -543,6 +552,8 @@ def qualifier_ticket(ticket_id: int):
     })
     
     if success:
+        # Invalidate cache for dashboard data
+        db.invalidate_cache('dashboard')
         flash('Qualification enregistrée.', 'success')
     else:
         flash('Erreur lors de la qualification.', 'error')
@@ -590,6 +601,8 @@ def escalader_ticket(ticket_id: int):
     })
     
     if success:
+        # Invalidate cache for dashboard data
+        db.invalidate_cache('dashboard')
         flash(f'Ticket escaladé vers {next_role}.', 'success')
     else:
         flash('Erreur lors de l\'escalade.', 'error')
@@ -645,6 +658,8 @@ def resoudre_ticket(ticket_id: int):
     })
     
     if success:
+        # Invalidate cache for dashboard data
+        db.invalidate_cache('dashboard')
         flash(f'Ticket en résolution ({minutes} min).', 'success')
     else:
         flash('Erreur lors de la mise en résolution.', 'error')
@@ -687,6 +702,8 @@ def valider_ticket(ticket_id: int):
     })
     
     if success:
+        # Invalidate cache for dashboard data
+        db.invalidate_cache('dashboard')
         flash('Ticket clôturé avec succès.', 'success')
     else:
         flash('Erreur lors de la clôture.', 'error')
@@ -748,6 +765,8 @@ def refuser_ticket(ticket_id: int):
     })
     
     if success:
+        # Invalidate cache for dashboard data
+        db.invalidate_cache('dashboard')
         flash('Ticket renvoyé pour nouveau traitement.', 'success')
     else:
         flash('Erreur lors du renvoi.', 'error')
@@ -826,6 +845,8 @@ def ajouter_utilisateur():
         # Create user
         user = db.create_user(user_data)
         if user:
+            # Invalidate cache for user data
+            db.invalidate_cache('users')
             flash('Utilisateur ajouté avec succès !', 'success')
             return redirect(url_for('gestion_utilisateurs'))
         else:
@@ -877,6 +898,8 @@ def modifier_utilisateur(user_id):
         # Update user
         user = db.update_user(user_id, user_data)
         if user:
+            # Invalidate cache for user data
+            db.invalidate_cache('users')
             flash('Utilisateur modifié avec succès !', 'success')
         else:
             flash('Erreur lors de la modification de l\'utilisateur', 'error')
@@ -921,6 +944,8 @@ def supprimer_utilisateur(user_id):
     # Delete user
     success = db.delete_user(user_id)
     if success:
+        # Invalidate cache for user data
+        db.invalidate_cache('users')
         flash('Utilisateur supprimé avec succès !', 'success')
     else:
         flash('Erreur lors de la suppression de l\'utilisateur', 'error')

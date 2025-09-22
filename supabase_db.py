@@ -6,8 +6,10 @@ Provides easy-to-use functions for database operations
 
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import time
+from functools import lru_cache
 
 # Load environment variables
 load_dotenv()
@@ -32,6 +34,38 @@ class SupabaseDB:
         
         # Remove trailing slash from URL
         self.supabase_url = self.supabase_url.rstrip('/')
+        
+        # Cache for frequently accessed data
+        self._cache = {}
+        self._cache_ttl = {}
+        self._cache_duration = 300  # 5 minutes cache
+    
+    def _get_cached(self, key):
+        """Get data from cache if not expired"""
+        if key in self._cache and key in self._cache_ttl:
+            if time.time() < self._cache_ttl[key]:
+                return self._cache[key]
+            else:
+                # Remove expired cache
+                del self._cache[key]
+                del self._cache_ttl[key]
+        return None
+    
+    def _set_cache(self, key, data):
+        """Set data in cache with TTL"""
+        self._cache[key] = data
+        self._cache_ttl[key] = time.time() + self._cache_duration
+    
+    def _clear_cache(self, pattern=None):
+        """Clear cache, optionally by pattern"""
+        if pattern:
+            keys_to_remove = [k for k in self._cache.keys() if pattern in k]
+            for key in keys_to_remove:
+                self._cache.pop(key, None)
+                self._cache_ttl.pop(key, None)
+        else:
+            self._cache.clear()
+            self._cache_ttl.clear()
         
     def _make_request(self, method, endpoint, data=None, params=None):
         """Make a request to Supabase REST API"""
@@ -91,9 +125,15 @@ class SupabaseDB:
             return None
     
     def get_all_users(self):
-        """Get all users with role information"""
+        """Get all users with role information and caching"""
+        cache_key = "all_users"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", "utilisateur?select=id,nom_utilisateur,email,prenom,nom,role_id,role(nom)")
+            self._set_cache(cache_key, result)
             return result
         except Exception as e:
             print(f"Error getting all users: {e}")
@@ -137,9 +177,15 @@ class SupabaseDB:
             return None
     
     def get_all_roles(self):
-        """Get all roles"""
+        """Get all roles with caching"""
+        cache_key = "all_roles"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", "role?select=id,nom,description")
+            self._set_cache(cache_key, result)
             return result
         except Exception as e:
             print(f"Error getting all roles: {e}")
@@ -220,28 +266,47 @@ class SupabaseDB:
     
     # Status operations
     def get_all_statuses(self):
-        """Get all statuses"""
+        """Get all statuses with caching"""
+        cache_key = "all_statuses"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", "statut?select=id,nom")
+            self._set_cache(cache_key, result)
             return result
         except Exception as e:
             print(f"Error getting all statuses: {e}")
             return []
     
     def get_status_by_name(self, status_name):
-        """Get status by name"""
+        """Get status by name with caching"""
+        cache_key = f"status_by_name_{status_name}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", f"statut?nom=eq.{status_name}&select=id")
-            return result[0]['id'] if result else None
+            status_id = result[0]['id'] if result else None
+            self._set_cache(cache_key, status_id)
+            return status_id
         except Exception as e:
             print(f"Error getting status by name: {e}")
             return None
     
     # Category operations
     def get_all_categories(self):
-        """Get all categories"""
+        """Get all categories with caching"""
+        cache_key = "all_categories"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", "categorie?select=id,nom")
+            self._set_cache(cache_key, result)
             return result
         except Exception as e:
             print(f"Error getting all categories: {e}")
@@ -249,9 +314,15 @@ class SupabaseDB:
     
     # Type operations
     def get_all_types(self):
-        """Get all types"""
+        """Get all types with caching"""
+        cache_key = "all_types"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", "type?select=id,nom")
+            self._set_cache(cache_key, result)
             return result
         except Exception as e:
             print(f"Error getting all types: {e}")
@@ -259,9 +330,15 @@ class SupabaseDB:
     
     # Habilitation operations
     def get_all_habilitations(self):
-        """Get all habilitations"""
+        """Get all habilitations with caching"""
+        cache_key = "all_habilitations"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+            
         try:
             result = self._make_request("GET", "habilitation?select=id,nom,categorie&order=categorie,nom")
+            self._set_cache(cache_key, result)
             return result
         except Exception as e:
             print(f"Error getting all habilitations: {e}")
@@ -341,6 +418,115 @@ class SupabaseDB:
         except Exception as e:
             print(f"Error updating ticket status: {e}")
             return None
+    
+    # Optimized dashboard methods
+    def get_dashboard_data(self, user_id, user_role):
+        """Get all dashboard data in optimized queries"""
+        try:
+            # Get user tickets with all related data in one query
+            tickets_query = f"ticket?idutilisateur=eq.{user_id}&select=id,titre,description,date_creation,statut_id,statut(nom),categorie_id,categorie(nom),type_id,type(nom),priorite_id,priorite(nom),assigned_role_id,required_habilitation_id,resolution_due_at,resolution_attempts&order=date_creation.desc"
+            
+            # Get all static data in parallel (these are cached)
+            tickets_data = self._make_request("GET", tickets_query)
+            statuses_data = self.get_all_statuses()
+            categories_data = self.get_all_categories()
+            types_data = self.get_all_types()
+            
+            return {
+                'tickets': tickets_data,
+                'statuses': statuses_data,
+                'categories': categories_data,
+                'types': types_data
+            }
+        except Exception as e:
+            print(f"Error getting dashboard data: {e}")
+            return {
+                'tickets': [],
+                'statuses': [],
+                'categories': [],
+                'types': []
+            }
+    
+    def get_admin_dashboard_data(self):
+        """Get all admin dashboard data in optimized queries"""
+        try:
+            # Get all tickets with user and status info in one query
+            tickets_query = "ticket?select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur,prenom,nom),categorie_id,categorie(nom),type_id,type(nom),priorite_id,priorite(nom),assigned_role_id,required_habilitation_id,resolution_due_at,resolution_attempts&order=date_creation.desc"
+            
+            # Get all static data (cached)
+            tickets_data = self._make_request("GET", tickets_query)
+            statuses_data = self.get_all_statuses()
+            users_data = self.get_all_users()
+            categories_data = self.get_all_categories()
+            types_data = self.get_all_types()
+            
+            return {
+                'tickets': tickets_data,
+                'statuses': statuses_data,
+                'users': users_data,
+                'categories': categories_data,
+                'types': types_data
+            }
+        except Exception as e:
+            print(f"Error getting admin dashboard data: {e}")
+            return {
+                'tickets': [],
+                'statuses': [],
+                'users': [],
+                'categories': [],
+                'types': []
+            }
+    
+    def get_resolution_dashboard_data(self, role_id, role_name):
+        """Get resolution dashboard data optimized for role-based access"""
+        try:
+            if role_name == 'N1':
+                # N1 sees tickets assigned to N1 or unassigned
+                tickets_query = f"ticket?or=(assigned_role_id.eq.{role_id},assigned_role_id.is.null)&select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur),categorie_id,categorie(nom),type_id,type(nom),priorite_id,priorite(nom),assigned_role_id,required_habilitation_id,resolution_due_at,resolution_attempts&order=date_creation.desc"
+            else:
+                # Others see only tickets assigned to their role
+                tickets_query = f"ticket?assigned_role_id=eq.{role_id}&select=id,titre,description,date_creation,statut_id,statut(nom),idutilisateur,utilisateur(nom_utilisateur),categorie_id,categorie(nom),type_id,type(nom),priorite_id,priorite(nom),assigned_role_id,required_habilitation_id,resolution_due_at,resolution_attempts&order=date_creation.desc"
+            
+            tickets_data = self._make_request("GET", tickets_query)
+            habilitations_data = self.get_all_habilitations()
+            
+            # Get role habilitations for permission checking
+            role_habilitations = self.get_role_habilitations(role_id) if role_id else []
+            role_hab_ids = {h['id'] for h in role_habilitations}
+            
+            return {
+                'tickets': tickets_data,
+                'habilitations': habilitations_data,
+                'role_hab_ids': role_hab_ids
+            }
+        except Exception as e:
+            print(f"Error getting resolution dashboard data: {e}")
+            return {
+                'tickets': [],
+                'habilitations': [],
+                'role_hab_ids': set()
+            }
+    
+    def invalidate_cache(self, pattern=None):
+        """Invalidate cache entries"""
+        self._clear_cache(pattern)
+    
+    def preload_static_data(self):
+        """Preload all static data to warm up the cache"""
+        try:
+            # Load all static data that's commonly used
+            self.get_all_statuses()
+            self.get_all_categories()
+            self.get_all_types()
+            self.get_all_habilitations()
+            self.get_all_roles()
+            self.get_all_users()
+            print("Static data preloaded successfully")
+        except Exception as e:
+            print(f"Error preloading static data: {e}")
 
 # Global database instance
 db = SupabaseDB()
+
+# Preload static data on startup
+db.preload_static_data()
