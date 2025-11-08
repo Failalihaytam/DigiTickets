@@ -205,16 +205,10 @@ def forgot_password():
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
-        
-        # Check if user exists with matching username and email
-        users = db.get_all_users()
-        user = None
-        for u in users:
-            if u['nom_utilisateur'] == username and u['email'] == email:
-                user = u
-                break
-        
-        if user:
+        # Get the user by username+email (this selects mot_de_passe explicitly)
+        user = db.get_user_by_username_and_email(username, email)
+
+        if user and 'mot_de_passe' in user:
             password = user['mot_de_passe']
             try:
                 sender = os.environ.get('GMAIL_USER')
@@ -232,7 +226,8 @@ def forgot_password():
             except Exception as e:
                 flash('Échec de l\'envoi de l\'e-mail : ' + str(e), 'error')
         else:
-            message = 'Le nom d\'utilisateur et l\'e-mail ne correspondent pas à nos enregistrements.'
+            # Either user not found or there is no stored password field
+            message = 'Le nom d\'utilisateur et l\'e-mail ne correspondent pas à nos enregistrements, ou le mot de passe n\'est pas disponible. Veuillez contacter l\'administrateur.'
     return render_template('forgot_password.html', message=message)
 
 @app.route('/success')

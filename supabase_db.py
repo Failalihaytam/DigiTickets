@@ -123,6 +123,22 @@ class SupabaseDB:
         except Exception as e:
             print(f"Error getting user by ID: {e}")
             return None
+
+    def get_user_by_username_and_email(self, username, email):
+        """Get a single user matching username and email. Includes mot_de_passe when available.
+
+        Returns the user dict or None.
+        """
+        try:
+            # Select mot_de_passe explicitly so callers can use it when necessary
+            result = self._make_request(
+                "GET",
+                f"utilisateur?nom_utilisateur=eq.{username}&email=eq.{email}&select=id,nom_utilisateur,email,mot_de_passe,prenom,nom,role_id,role(nom)"
+            )
+            return result[0] if result else None
+        except Exception as e:
+            print(f"Error getting user by username and email: {e}")
+            return None
     
     def get_all_users(self):
         """Get all users with role information and caching"""
