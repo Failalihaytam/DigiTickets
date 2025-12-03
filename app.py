@@ -17,9 +17,9 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload size
 ROLE_ORDER = ['N1', 'N2', 'N3', 'N4']
 RESOLUTION_MINUTES_BY_ROLE = {
     'N1': 1,
-    'N2': 2,
-    'N3': 3,
-    'N4': 4,
+    'N2': 1,
+    'N3': 1,
+    'N4': 1,
 }
 
 def get_role_id_by_name(role_name: str):
